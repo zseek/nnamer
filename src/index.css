@@ -1,0 +1,106 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: 240 5% 96%;
+  --color-surface: 0 0% 100%;
+  --color-border: 220 13% 91%;
+  --color-text: 220 20% 10%;
+  --color-text-secondary: 220 15% 35%;
+  --color-primary: 217 91% 60%;
+  --color-primary-hover: 217 91% 55%;
+  --color-success: 142 71% 45%;
+  --color-warning: 38 92% 50%;
+  --color-error: 0 72% 51%;
+}
+
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    background-color: hsl(var(--color-background));
+    color: hsl(var(--color-text));
+    overflow: hidden;
+  }
+
+  button {
+    cursor: pointer;
+    font-family: inherit;
+    font-size: inherit;
+  }
+
+  input, select, textarea {
+    font-family: inherit;
+    font-size: inherit;
+  }
+}
+
+.toolbar {
+  background: hsl(var(--color-surface));
+  border-bottom: 1px solid hsl(var(--color-border));
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn {
+  padding: 4px 12px;
+  border: 1px solid hsl(var(--color-border));
+  background: hsl(var(--color-surface));
+  border-radius: 4px;
+  font-size: 12px;
+  transition: all 0.15s;
+}
+
+.btn:hover {
+  background: hsl(var(--color-background));
+}
+
+.btn-primary {
+  background: hsl(var(--color-primary));
+  color: white;
+  border-color: hsl(var(--color-primary));
+}
+
+.btn-primary:hover {
+  background: hsl(var(--color-primary-hover));
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.input {
+  padding: 4px 8px;
+  border: 1px solid hsl(var(--color-border));
+  border-radius: 3px;
+  background: hsl(var(--color-surface));
+}
+
+.input:focus {
+  outline: none;
+  border-color: hsl(var(--color-primary));
+  box-shadow: 0 0 0 3px hsla(var(--color-primary), 0.1);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-unanalyzed { background: hsl(var(--color-text-secondary)); }
+.status-analyzing { background: hsl(var(--color-primary)); }
+.status-normal { background: hsl(var(--color-success)); }
+.status-conflict { background: hsl(var(--color-error)); }
+.status-failed { background: hsl(var(--color-error)); }
+

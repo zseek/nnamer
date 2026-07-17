@@ -4,6 +4,7 @@ use std::time::Duration;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tauri::AppHandle;
 
 use crate::error::{AppError, AppResult};
 use crate::naming;
@@ -35,10 +36,18 @@ pub struct BatchAnalysisResult {
 
 #[tauri::command]
 pub async fn analyze_batch(
+    app_handle: AppHandle,
     settings: AppSettings,
     batch_index: usize,
     requests: Vec<AnalysisRequest>,
 ) -> AppResult<BatchAnalysisResult> {
+    use crate::logger;
+
+    logger::log_info(
+        &app_handle,
+        format!("开始分析批次 {} ({} 个文件)", batch_index, requests.len()),
+    );
+
     settings.validate()?;
 
     if requests.is_empty() {
@@ -50,7 +59,12 @@ pub async fn analyze_batch(
         .build()?;
 
     let user_prompt = build_batch_prompt(&settings.prompt, &requests);
-    let chat_completion_url = format!("{}/chat/completions", settings.base_url.trim_end_matches('/'));
+    let chat_completion_url = format!(
+        "{}/chat/completions",
+        settings.base_url.trim_end_matches('/')
+    );
+
+    logger::log_debug(&app_handle, format!("API 端点: {}", chat_completion_url));
 
     let request_body = json!({
         "model": settings.model,
@@ -66,6 +80,10 @@ pub async fn analyze_batch(
     let mut last_error = None;
     for attempt in 0..=settings.max_retries {
         if attempt > 0 {
+            logger::log_warn(
+                &app_handle,
+                format!("批次 {} 重试第 {} 次", batch_index, attempt),
+            );
             tokio::time::sleep(Duration::from_millis(500 * attempt as u64)).await;
         }
 
@@ -83,34 +101,61 @@ pub async fn analyze_batch(
                 let response_text = http_response.text().await?;
 
                 if !status.is_success() {
-                    last_error = Some(format!("HTTP {}: {}", status, response_text));
+                    let error_msg = format!("HTTP {}: {}", status, response_text);
+                    logger::log_error(
+                        &app_handle,
+                        format!("批次 {} API 错误: {}", batch_index, error_msg),
+                    );
+                    last_error = Some(error_msg);
                     continue;
                 }
 
-                return parse_completion_response(batch_index, &requests, &response_text);
+                logger::log_info(
+                    &app_handle,
+                    format!("批次 {} 分析成功，开始解析响应", batch_index),
+                );
+                let result = parse_completion_response(batch_index, &requests, &response_text);
+
+                match &result {
+                    Ok(_) => logger::log_info(&app_handle, format!("批次 {} 完成", batch_index)),
+                    Err(e) => logger::log_error(
+                        &app_handle,
+                        format!("批次 {} 解析失败: {}", batch_index, e),
+                    ),
+                }
+
+                return result;
             }
             Err(error) => {
-                last_error = Some(format!("请求失败：{}", error));
+                let error_msg = format!("请求失败：{}", error);
+                logger::log_error(
+                    &app_handle,
+                    format!("批次 {} 网络错误: {}", batch_index, error_msg),
+                );
+                last_error = Some(error_msg);
             }
         }
     }
 
-    Err(AppError::Llm(format!(
+    let final_error = format!(
         "批次 {} 重试 {} 次后仍然失败：{}",
         batch_index,
         settings.max_retries,
         last_error.unwrap_or_else(|| "未知错误".to_string())
-    )))
+    );
+    logger::log_error(&app_handle, &final_error);
+    Err(AppError::Llm(final_error))
 }
 
 fn build_batch_prompt(user_rules: &str, requests: &[AnalysisRequest]) -> String {
     let files_json = requests
         .iter()
         .map(|request| {
+            let extensionless_filename = naming::strip_txt_extension(&request.original_stem);
             format!(
                 r#"{{"id": "{}", "filename": "{}"}}"#,
                 request.file_id.replace('"', r#"\""#),
-                request.original_stem.replace('"', r#"\""#)
+                extensionless_filename.replace('"', r#"\""#)
             )
         })
         .collect::<Vec<_>>()
@@ -137,9 +182,8 @@ fn parse_completion_response(
     requests: &[AnalysisRequest],
     response_text: &str,
 ) -> AppResult<BatchAnalysisResult> {
-    let response_json: Value = serde_json::from_str(response_text).map_err(|error| {
-        AppError::Llm(format!("无法解析 JSON 响应：{}", error))
-    })?;
+    let response_json: Value = serde_json::from_str(response_text)
+        .map_err(|error| AppError::Llm(format!("无法解析 JSON 响应：{}", error)))?;
 
     let content = response_json["choices"][0]["message"]["content"]
         .as_str()
@@ -162,9 +206,8 @@ fn parse_completion_response(
         trimmed_content
     };
 
-    let suggestions: Vec<LlmSuggestion> = serde_json::from_str(json_content).map_err(|error| {
-        AppError::Llm(format!("无法解析建议列表：{}", error))
-    })?;
+    let suggestions: Vec<LlmSuggestion> = serde_json::from_str(json_content)
+        .map_err(|error| AppError::Llm(format!("无法解析建议列表：{}", error)))?;
 
     let suggestion_map: HashMap<String, String> = suggestions
         .into_iter()
@@ -174,10 +217,11 @@ fn parse_completion_response(
     let mut results = Vec::new();
     for request in requests {
         let analysis_result = if let Some(suggested_name) = suggestion_map.get(&request.file_id) {
-            let validation = naming::normalize_suggested_name(suggested_name);
+            let extensionless_suggested_name = naming::strip_txt_extension(suggested_name);
+            let validation = naming::normalize_suggested_name(&extensionless_suggested_name);
             AnalysisResult {
                 file_id: request.file_id.clone(),
-                suggested_name: Some(suggested_name.clone()),
+                suggested_name: Some(extensionless_suggested_name),
                 normalized_name: validation.normalized_name,
                 error: validation.error,
             }
@@ -210,13 +254,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builds_batch_prompt_with_file_ids() {
+    fn builds_batch_prompt_without_filename_extensions() {
         let requests = vec![AnalysisRequest {
             file_id: "file-001".to_string(),
-            original_stem: "诡秘之主(全本)".to_string(),
+            original_stem: "诡秘之主(全本).TXT".to_string(),
         }];
         let prompt = build_batch_prompt("识别书名", &requests);
         assert!(prompt.contains("file-001"));
-        assert!(prompt.contains("诡秘之主(全本)"));
+        assert!(prompt.contains(r#""filename": "诡秘之主(全本)""#));
+        assert!(!prompt.contains(r#""filename": "诡秘之主(全本).TXT""#));
+    }
+
+    #[test]
+    fn strips_extensions_from_llm_suggestions() {
+        let requests = vec![AnalysisRequest {
+            file_id: "file-001".to_string(),
+            original_stem: "诡秘之主".to_string(),
+        }];
+        let response_text = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": r#"[{"id":"file-001","suggested_name":"诡秘之主.txt"}]"#
+                }
+            }]
+        })
+        .to_string();
+
+        let result = parse_completion_response(0, &requests, &response_text).unwrap();
+        assert_eq!(
+            result.results[0].suggested_name.as_deref(),
+            Some("诡秘之主")
+        );
+        assert_eq!(
+            result.results[0].normalized_name.as_deref(),
+            Some("诡秘之主")
+        );
     }
 }

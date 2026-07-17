@@ -3,6 +3,7 @@
 mod error;
 mod files;
 mod llm;
+mod logger;
 mod naming;
 mod settings;
 

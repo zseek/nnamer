@@ -6,6 +6,11 @@ use tauri::{AppHandle, Manager};
 use crate::error::{AppError, AppResult};
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
+const DEFAULT_CONCURRENCY: usize = 3;
+
+fn default_concurrency() -> usize {
+    DEFAULT_CONCURRENCY
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +21,8 @@ pub struct AppSettings {
     pub batch_size: usize,
     pub timeout_seconds: u64,
     pub max_retries: u32,
+    #[serde(default = "default_concurrency")]
+    pub concurrency: usize,
     pub prompt: String,
 }
 
@@ -28,7 +35,9 @@ impl Default for AppSettings {
             batch_size: 15,
             timeout_seconds: 60,
             max_retries: 2,
-            prompt: r#"你是一个专业的文件名识别工具。你的任务是从混乱的文件名中提取出正确的小说书名。
+            concurrency: default_concurrency(),
+            prompt:
+                r#"你是一个专业的文件名识别工具。你的任务是从混乱的文件名中提取出正确的小说书名。
 
 **处理规则：**
 1. 去除所有无关信息：作者名、网站名、下载来源、完结标记、章节范围、更新日期、括号内广告
@@ -41,13 +50,14 @@ impl Default for AppSettings {
 - "suggested_name": 识别出的书名（纯文本，不含扩展名）
 
 **示例：**
-输入文件名："[顶点小说]诡秘之主(全本)作者爱潜水的乌贼.txt"
+输入文件名："[顶点小说]诡秘之主(全本)作者爱潜水的乌贼"
 输出：{"id": "file-001", "suggested_name": "诡秘之主"}
 
 **重要：**
 1. 必须包含所有输入文件，一个都不能遗漏
 2. 只返回 JSON 数组，不要任何其他文字说明
-3. 确保 JSON 格式正确可解析"#.to_string(),
+3. 确保 JSON 格式正确可解析"#
+                    .to_string(),
         }
     }
 }
@@ -72,6 +82,11 @@ impl AppSettings {
         }
         if self.max_retries > 5 {
             return Err(AppError::Validation("最大重试次数不能超过 5".to_string()));
+        }
+        if !(1..=10).contains(&self.concurrency) {
+            return Err(AppError::Validation(
+                "并发数必须在 1 到 10 之间".to_string(),
+            ));
         }
         if self.prompt.trim().is_empty() {
             return Err(AppError::Validation("Prompt 不能为空".to_string()));
@@ -115,7 +130,7 @@ fn resolve_settings_path(app_handle: &AppHandle) -> AppResult<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::AppSettings;
+    use super::{AppSettings, DEFAULT_CONCURRENCY};
 
     #[test]
     fn validates_batch_size_range() {
@@ -124,5 +139,29 @@ mod tests {
             ..AppSettings::default()
         };
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn validates_concurrency_range() {
+        let settings = AppSettings {
+            concurrency: 0,
+            ..AppSettings::default()
+        };
+        assert!(settings.validate().is_err());
+
+        let settings = AppSettings {
+            concurrency: 11,
+            ..AppSettings::default()
+        };
+        assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn loads_legacy_settings_without_concurrency() {
+        let mut settings_json = serde_json::to_value(AppSettings::default()).unwrap();
+        settings_json.as_object_mut().unwrap().remove("concurrency");
+
+        let settings: AppSettings = serde_json::from_value(settings_json).unwrap();
+        assert_eq!(settings.concurrency, DEFAULT_CONCURRENCY);
     }
 }

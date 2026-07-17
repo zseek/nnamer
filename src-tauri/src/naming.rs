@@ -2,9 +2,8 @@ use serde::{Deserialize, Serialize};
 
 const MAX_STEM_CHARACTERS: usize = 180;
 const WINDOWS_RESERVED_NAMES: &[&str] = &[
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6",
-    "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7",
-    "LPT8", "LPT9",
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -72,11 +71,19 @@ pub fn canonical_name(input: &str) -> Option<String> {
         .map(|name| name.to_lowercase())
 }
 
-fn strip_txt_extension(input: &str) -> &str {
-    if input.len() >= 4 && input[input.len() - 4..].eq_ignore_ascii_case(".txt") {
-        &input[..input.len() - 4]
+pub fn strip_txt_extension(input: &str) -> String {
+    let input_without_trailing_whitespace = input.trim_end();
+    if input_without_trailing_whitespace
+        .to_lowercase()
+        .ends_with(".txt")
+    {
+        let character_count = input_without_trailing_whitespace.chars().count();
+        input_without_trailing_whitespace
+            .chars()
+            .take(character_count - 4)
+            .collect()
     } else {
-        input
+        input.to_string()
     }
 }
 
@@ -89,13 +96,20 @@ fn invalid_name(message: &str) -> NameValidation {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_name, normalize_suggested_name};
+    use super::{canonical_name, normalize_suggested_name, strip_txt_extension};
 
     #[test]
     fn removes_txt_extension_and_replaces_windows_characters() {
         let result = normalize_suggested_name("  诡秘:之主?.TXT  ");
         assert_eq!(result.normalized_name.as_deref(), Some("诡秘：之主？"));
         assert_eq!(result.error, None);
+    }
+
+    #[test]
+    fn strips_txt_extension_without_damaging_unicode() {
+        assert_eq!(strip_txt_extension("诡秘之主.txt"), "诡秘之主");
+        assert_eq!(strip_txt_extension("诡秘之主.TXT"), "诡秘之主");
+        assert_eq!(strip_txt_extension("版本.txt.backup"), "版本.txt.backup");
     }
 
     #[test]

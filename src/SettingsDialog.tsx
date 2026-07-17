@@ -110,7 +110,7 @@ const DEFAULT_PROMPT = `你是一个专业的文件名识别工具。你的任�
 - "suggested_name": 识别出的书名（纯文本，不含扩展名）
 
 **示例：**
-输入文件名："[顶点小说]诡秘之主(全本)作者爱潜水的乌贼.txt"
+输入文件名："[顶点小说]诡秘之主(全本)作者爱潜水的乌贼"
 输出：{"id": "file-001", "suggested_name": "诡秘之主"}
 
 **重要：**
@@ -129,6 +129,7 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
       batchSize: 15,
       timeoutSeconds: 60,
       maxRetries: 2,
+      concurrency: 3,
     }
   );
 
@@ -196,15 +197,53 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
           </div>
 
           <div style={styles.row}>
-            <label style={styles.label}>批次大小 (10-20)</label>
-            <input
-              type="number"
-              style={styles.input}
-              value={formData.batchSize}
-              onChange={(e) => setFormData({ ...formData, batchSize: parseInt(e.target.value) || 15 })}
-              min="10"
-              max="20"
-            />
+            <label style={styles.label}>分析参数</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
+                批次大小 (10-20)
+                <input
+                  type="number"
+                  style={{ ...styles.input, width: '64px' }}
+                  value={formData.batchSize}
+                  onChange={(event) => setFormData({
+                    ...formData,
+                    batchSize: Number.parseInt(event.target.value, 10) || 15,
+                  })}
+                  min="10"
+                  max="20"
+                />
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
+                重试次数 (0-5)
+                <input
+                  type="number"
+                  style={{ ...styles.input, width: '56px' }}
+                  value={formData.maxRetries}
+                  onChange={(event) => setFormData({
+                    ...formData,
+                    maxRetries: Number.parseInt(event.target.value, 10) || 0,
+                  })}
+                  min="0"
+                  max="5"
+                  title="每个批次首次请求失败后的最大重试次数"
+                />
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
+                并发数 (1-10)
+                <input
+                  type="number"
+                  style={{ ...styles.input, width: '56px' }}
+                  value={formData.concurrency}
+                  onChange={(event) => setFormData({
+                    ...formData,
+                    concurrency: Number.parseInt(event.target.value, 10) || 1,
+                  })}
+                  min="1"
+                  max="10"
+                  title="同时发送的批次请求数量"
+                />
+              </label>
+            </div>
           </div>
 
           <div style={styles.section}>

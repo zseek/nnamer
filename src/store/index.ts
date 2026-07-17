@@ -6,16 +6,18 @@ interface AppStore {
   files: FileItem[];
   settings: AppSettings | null;
   analysisProgress: AnalysisProgress;
+  showLogger: boolean;
   
   setCurrentDirectory: (directory: string | null) => void;
-  setFiles: (files: FileItem[]) => void;
+  setFiles: (files: FileItem[] | ((prev: FileItem[]) => FileItem[])) => void;
   updateFile: (id: string, updates: Partial<FileItem>) => void;
   removeFiles: (ids: string[]) => void;
   toggleFileSelection: (id: string) => void;
   selectAll: () => void;
   deselectAll: () => void;
   setSettings: (settings: AppSettings) => void;
-  setAnalysisProgress: (progress: Partial<AnalysisProgress>) => void;
+  setAnalysisProgress: (progress: Partial<AnalysisProgress> | ((prev: AnalysisProgress) => Partial<AnalysisProgress>)) => void;
+  setShowLogger: (show: boolean) => void;
   clearFiles: () => void;
 }
 
@@ -28,11 +30,16 @@ export const useAppStore = create<AppStore>((set) => ({
     completedBatches: 0,
     failedBatches: 0,
     isRunning: false,
+    isPaused: false,
   },
+  showLogger: false,
 
   setCurrentDirectory: (directory) => set({ currentDirectory: directory }),
   
-  setFiles: (files) => set({ files }),
+  setFiles: (files) =>
+    set((state) => ({
+      files: typeof files === 'function' ? files(state.files) : files,
+    })),
   
   updateFile: (id, updates) =>
     set((state) => ({
@@ -67,8 +74,13 @@ export const useAppStore = create<AppStore>((set) => ({
   
   setAnalysisProgress: (progress) =>
     set((state) => ({
-      analysisProgress: { ...state.analysisProgress, ...progress },
+      analysisProgress: { 
+        ...state.analysisProgress, 
+        ...(typeof progress === 'function' ? progress(state.analysisProgress) : progress)
+      },
     })),
+  
+  setShowLogger: (show) => set({ showLogger: show }),
   
   clearFiles: () =>
     set({
@@ -79,6 +91,7 @@ export const useAppStore = create<AppStore>((set) => ({
         completedBatches: 0,
         failedBatches: 0,
         isRunning: false,
+        isPaused: false,
       },
     }),
 }));

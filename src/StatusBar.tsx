@@ -1,4 +1,5 @@
 import { useAppStore } from './store';
+import type { FileStatus } from './shared/types';
 
 const styles: React.CSSProperties = {
   background: 'hsl(var(--color-surface))',
@@ -11,36 +12,59 @@ const styles: React.CSSProperties = {
   color: 'hsl(var(--color-text-secondary))',
 };
 
+const STATUS_LABELS: Record<FileStatus, string> = {
+  pending: '待分析',
+  analyzing: '分析中',
+  ready: '可执行',
+  unchanged: '无需修改',
+  conflict: '冲突',
+  failed: '失败',
+};
+
+const ATTENTION_STATUSES = new Set<FileStatus>(['conflict', 'failed']);
+
 export default function StatusBar() {
   const { files } = useAppStore();
-
-  const statusCounts = {
-    total: files.length,
-    unanalyzed: files.filter(f => f.status === 'unanalyzed').length,
-    analyzing: files.filter(f => f.status === 'analyzing').length,
-    normal: files.filter(f => f.status === 'normal').length,
-    conflict: files.filter(f => f.status === 'conflict').length,
-    failed: files.filter(f => f.status === 'analysisFailed').length,
-    selected: files.filter(f => f.selected).length,
+  const statusCounts: Record<FileStatus, number> = {
+    pending: 0,
+    analyzing: 0,
+    ready: 0,
+    unchanged: 0,
+    conflict: 0,
+    failed: 0,
   };
 
+  for (const file of files) {
+    statusCounts[file.status] += 1;
+  }
+
+  const selectedCount = files.reduce(
+    (count, file) => count + Number(file.selected),
+    0
+  );
+
   if (files.length === 0) {
-    return (
-      <div style={styles}>
-        准备就绪
-      </div>
-    );
+    return <div style={styles}>准备就绪</div>;
   }
 
   return (
     <div style={styles}>
-      <span>总计: {statusCounts.total}</span>
-      <span>已选: {statusCounts.selected}</span>
-      {statusCounts.unanalyzed > 0 && <span>未分析: {statusCounts.unanalyzed}</span>}
-      {statusCounts.analyzing > 0 && <span>分析中: {statusCounts.analyzing}</span>}
-      {statusCounts.normal > 0 && <span>正常: {statusCounts.normal}</span>}
-      {statusCounts.conflict > 0 && <span style={{ color: 'hsl(var(--color-error))' }}>冲突: {statusCounts.conflict}</span>}
-      {statusCounts.failed > 0 && <span style={{ color: 'hsl(var(--color-error))' }}>失败: {statusCounts.failed}</span>}
+      <span>总计: {files.length}</span>
+      <span>已选: {selectedCount}</span>
+      {(Object.keys(statusCounts) as FileStatus[]).map((status) =>
+        statusCounts[status] > 0 ? (
+          <span
+            key={status}
+            style={
+              ATTENTION_STATUSES.has(status)
+                ? { color: 'hsl(var(--color-error))' }
+                : undefined
+            }
+          >
+            {STATUS_LABELS[status]}: {statusCounts[status]}
+          </span>
+        ) : null
+      )}
     </div>
   );
 }

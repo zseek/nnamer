@@ -55,7 +55,9 @@ Nnamer/
 ## 核心设计
 
 ### 文件状态机
-- `unanalyzed` → `analyzing` → `normal` / `nameSame` / `conflict` / `analysisFailed` / `nameInvalid`
+- `pending` → `analyzing` → `ready` / `conflict` / `failed`
+- LLM 批次返回后立即写入建议名称并计算状态
+- 用户编辑建议名称后立即重新执行名称校验和冲突检查
 
 ### 名称标准化
 - 去除 `.txt` 扩展名

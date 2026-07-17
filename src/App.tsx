@@ -4,9 +4,10 @@ import { loadSettings } from './shared/lib/api';
 import Toolbar from './Toolbar';
 import FileList from './FileList';
 import StatusBar from './StatusBar';
+import Logger from './Logger';
 
 function App() {
-  const { setSettings } = useAppStore();
+  const { setSettings, showLogger, setShowLogger } = useAppStore();
 
   useEffect(() => {
     loadSettings()
@@ -21,6 +22,7 @@ function App() {
       <Toolbar />
       <FileList />
       <StatusBar />
+      <Logger isOpen={showLogger} onClose={() => setShowLogger(false)} />
     </div>
   );
 }

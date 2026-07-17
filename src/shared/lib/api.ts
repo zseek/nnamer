@@ -1,5 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { AppSettings } from '../types';
+import type {
+  AppSettings,
+  BatchAnalysisResult,
+  ScannedFile,
+} from '../types';
 
 export async function loadSettings(): Promise<AppSettings> {
   return await invoke<AppSettings>('load_settings');
@@ -9,16 +13,20 @@ export async function saveSettings(settings: AppSettings): Promise<AppSettings> 
   return await invoke<AppSettings>('save_settings', { settings });
 }
 
-export async function scanDirectory(directoryPath: string): Promise<any[]> {
-  return await invoke('scan_directory', { directoryPath });
+export async function scanDirectory(directoryPath: string): Promise<ScannedFile[]> {
+  return await invoke<ScannedFile[]>('scan_directory', { directoryPath });
 }
 
 export async function analyzeBatch(
   settings: AppSettings,
   batchIndex: number,
   requests: Array<{ fileId: string; originalStem: string }>
-): Promise<any> {
-  return await invoke('analyze_batch', { settings, batchIndex, requests });
+): Promise<BatchAnalysisResult> {
+  return await invoke<BatchAnalysisResult>('analyze_batch', {
+    settings,
+    batchIndex,
+    requests,
+  });
 }
 
 export async function moveFilesToRecycleBin(filePaths: string[]): Promise<any[]> {

@@ -98,9 +98,9 @@
   display: inline-block;
 }
 
-.status-unanalyzed { background: hsl(var(--color-text-secondary)); }
+.status-pending { background: hsl(var(--color-text-secondary)); }
 .status-analyzing { background: hsl(var(--color-primary)); }
-.status-normal { background: hsl(var(--color-success)); }
-.status-conflict { background: hsl(var(--color-error)); }
+.status-ready { background: hsl(var(--color-success)); }
+.status-unchanged { background: hsl(215 16% 47%); }
+.status-conflict { background: hsl(var(--color-warning)); }
 .status-failed { background: hsl(var(--color-error)); }
-

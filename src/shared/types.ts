@@ -1,11 +1,31 @@
 export type FileStatus =
-  | 'unanalyzed'
+  | 'pending'
   | 'analyzing'
-  | 'normal'
-  | 'nameSame'
+  | 'ready'
+  | 'unchanged'
   | 'conflict'
-  | 'analysisFailed'
-  | 'nameInvalid';
+  | 'failed';
+
+export interface AnalysisResult {
+  fileId: string;
+  suggestedName?: string;
+  normalizedName?: string;
+  error?: string;
+}
+
+export interface BatchAnalysisResult {
+  batchIndex: number;
+  results: AnalysisResult[];
+  rawResponse?: string;
+}
+
+export interface ScannedFile {
+  id: string;
+  originalName: string;
+  originalStem: string;
+  sizeBytes: number;
+  modifiedAt: number;
+}
 
 export interface FileItem {
   id: string;
@@ -27,6 +47,7 @@ export interface AppSettings {
   batchSize: number;
   timeoutSeconds: number;
   maxRetries: number;
+  concurrency: number;
   prompt: string;
 }
 
@@ -35,6 +56,7 @@ export interface AnalysisProgress {
   completedBatches: number;
   failedBatches: number;
   isRunning: boolean;
+  isPaused: boolean;
 }
 
 export interface ConflictGroup {

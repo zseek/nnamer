@@ -24,7 +24,7 @@
 - "suggested_name": 识别出的书名（纯文本，不含扩展名）
 
 **示例：**
-输入文件名："[顶点小说]诡秘之主(全本)作者爱潜水的乌贼.txt"
+输入文件名："[顶点小说]诡秘之主(全本)作者爱潜水的乌贼"
 输出：{"id": "file-001", "suggested_name": "诡秘之主"}
 
 **重要：**
@@ -80,7 +80,7 @@ fn build_batch_prompt(user_rules: &str, requests: &[AnalysisRequest]) -> String 
 - "suggested_name": 识别出的书名（纯文本，不含扩展名）
 
 **示例：**
-输入文件名："[顶点小说]诡秘之主(全本)作者爱潜水的乌贼.txt"
+输入文件名："[顶点小说]诡秘之主(全本)作者爱潜水的乌贼"
 输出：{"id": "file-001", "suggested_name": "诡秘之主"}
 
 **重要：**
@@ -242,7 +242,7 @@ pub fn normalize_suggested_name(suggested_name: &str) -> ValidationResult {
     }
     
     ValidationResult {
-        normalized_name: Some(format!("{}.txt", trimmed)),
+        normalized_name: Some(trimmed.to_string()),
         error: None,
     }
 }
@@ -256,7 +256,7 @@ pub fn normalize_suggested_name(suggested_name: &str) -> ValidationResult {
 2. 前端扫描目录，获取文件列表
    ↓
 3. 前端发起批量分析请求
-   每批 5-20 个文件（可配置）
+   每批 10-20 个文件（可配置），支持 1-10 个批次并发执行
    ↓
 4. Rust 后端构建完整 Prompt
    = 系统提示词 + 文件列表 + 格式要求
@@ -277,7 +277,7 @@ pub fn normalize_suggested_name(suggested_name: &str) -> ValidationResult {
 7. ID 匹配 & 验证
    - 通过 ID 匹配每个文件的建议名称
    - 验证文件名合法性
-   - 规范化为 "书名.txt"
+   - 规范化为不含扩展名的名称主干
    ↓
 8. 返回前端
    {
@@ -286,7 +286,7 @@ pub fn normalize_suggested_name(suggested_name: &str) -> ValidationResult {
        {
          "fileId": "file-00001",
          "suggestedName": "诡秘之主",
-         "normalizedName": "诡秘之主.txt",
+         "normalizedName": "诡秘之主",
          "error": null
        }
      ]
@@ -308,12 +308,13 @@ pub fn normalize_suggested_name(suggested_name: &str) -> ValidationResult {
 
 ### 文件名验证失败
 
-- 包含非法字符 → `status: nameInvalid`, `error: "包含非法字符"`
-- 书名为空 → `status: nameInvalid`, `error: "书名为空"`
+- 建议名称为空或无法规范化 → `status: failed`，并保留具体错误信息
+- Windows 保留设备名 → `status: failed`，并提示用户修改
+- 用户修改建议文件名后立即重新校验；有效且无冲突时，根据是否与源名称一致自动变为 `ready` 或 `unchanged`
 
 ### 网络错误
 
-- 超时 → 重试（最多 3 次，可配置）
+- 超时或其他可重试错误 → 按设置重试 0-5 次
 - HTTP 错误 → 记录状态码和响应，显示给用户
 
 ## 📊 数据结构
@@ -358,10 +359,11 @@ struct BatchAnalysisResult {
 
 - **API 端点**：支持 OpenAI 兼容的 API
 - **模型**：gpt-4o-mini、claude-3-5-sonnet 等
-- **批次大小**：1-20 个文件/批次
+- **批次大小**：10-20 个文件/批次
+- **并发数**：同时执行 1-10 个批次请求
 - **系统提示词**：完全自定义（带重置按钮）
 - **超时时间**：5-300 秒
-- **重试次数**：0-5 次
+- **重试次数**：每批首次请求失败后重试 0-5 次
 
 ---
 

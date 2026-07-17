@@ -1,15 +1,58 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useAppStore } from './store';
 import { scanDirectory, analyzeBatch, executeRenameOperations } from './shared/lib/api';
-import { deriveFileStatus } from './shared/lib/fileUtils';
+import { recomputeFileStatuses } from './shared/lib/fileUtils';
 import type { FileItem } from './shared/types';
 import SettingsDialog from './SettingsDialog';
 
 export default function Toolbar() {
-  const { currentDirectory, setCurrentDirectory, setFiles, files, settings, updateFile, setFiles: updateFiles, removeFiles, setAnalysisProgress, analysisProgress } = useAppStore();
+  const {
+    currentDirectory,
+    setCurrentDirectory,
+    setFiles,
+    files,
+    settings,
+    removeFiles,
+    setAnalysisProgress,
+    analysisProgress,
+    setShowLogger,
+  } = useAppStore();
   const [isScanning, setIsScanning] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const isAnalysisPausedRef = useRef(false);
+  const resumeWaitersRef = useRef<Array<() => void>>([]);
+
+  const releasePausedWorkers = () => {
+    const waitingResolvers = resumeWaitersRef.current.splice(0);
+    waitingResolvers.forEach((resolveWaitingWorker) => resolveWaitingWorker());
+  };
+
+  const waitUntilAnalysisResumes = async () => {
+    if (!isAnalysisPausedRef.current) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      resumeWaitersRef.current.push(resolve);
+    });
+  };
+
+  const handleToggleAnalysisPause = () => {
+    if (!analysisProgress.isRunning) {
+      return;
+    }
+
+    if (isAnalysisPausedRef.current) {
+      isAnalysisPausedRef.current = false;
+      setAnalysisProgress({ isPaused: false });
+      releasePausedWorkers();
+      return;
+    }
+
+    isAnalysisPausedRef.current = true;
+    setAnalysisProgress({ isPaused: true });
+  };
 
   const handleSelectDirectory = async () => {
     try {
@@ -25,7 +68,12 @@ export default function Toolbar() {
         
         try {
           const scannedFiles = await scanDirectory(selected);
-          setFiles(scannedFiles);
+          const filesWithDefaults: FileItem[] = scannedFiles.map((file) => ({
+            ...file,
+            selected: false,
+            status: 'pending',
+          }));
+          setFiles(filesWithDefaults);
         } catch (error) {
           console.error('扫描失败:', error);
           alert(`扫描失败: ${error}`);
@@ -40,78 +88,163 @@ export default function Toolbar() {
   };
 
   const handleAnalyzeAll = async () => {
-    if (!settings) return;
-    
+    if (!settings || analysisProgress.isRunning) {
+      return;
+    }
+
     const selectedFiles = files.filter((file) => file.selected);
     if (selectedFiles.length === 0) {
       alert('请先选择要分析的文件');
       return;
     }
-    
-    const unanalyzedFiles = selectedFiles.filter((file) => file.status === 'unanalyzed');
-    if (unanalyzedFiles.length === 0) {
-      alert('所选文件已全部分析完成');
+
+    const analyzableFiles = selectedFiles.filter(
+      (file) => file.status === 'pending' || file.status === 'failed'
+    );
+    if (analyzableFiles.length === 0) {
+      alert('所选文件没有待分析或可重试的项目');
       return;
     }
 
-    const batchSize = settings.batchSize;
     const batches: FileItem[][] = [];
-
-    for (let i = 0; i < unanalyzedFiles.length; i += batchSize) {
-      batches.push(unanalyzedFiles.slice(i, i + batchSize));
+    for (
+      let batchStart = 0;
+      batchStart < analyzableFiles.length;
+      batchStart += settings.batchSize
+    ) {
+      batches.push(analyzableFiles.slice(batchStart, batchStart + settings.batchSize));
     }
 
+    isAnalysisPausedRef.current = false;
+    releasePausedWorkers();
     setAnalysisProgress({
       totalBatches: batches.length,
       completedBatches: 0,
       failedBatches: 0,
       isRunning: true,
+      isPaused: false,
     });
 
-    for (const batch of batches) {
-      batch.forEach((file) => updateFile(file.id, { status: 'analyzing' }));
+    const processBatch = async (batchIndex: number) => {
+      const batch = batches[batchIndex];
+      const batchFileIds = new Set(batch.map((file) => file.id));
+
+      setFiles((currentFiles) =>
+        currentFiles.map((file) =>
+          batchFileIds.has(file.id)
+            ? {
+                ...file,
+                suggestedName: undefined,
+                normalizedName: undefined,
+                error: undefined,
+                status: 'analyzing',
+              }
+            : file
+        )
+      );
 
       try {
         const requests = batch.map((file) => ({
           fileId: file.id,
           originalStem: file.originalStem,
         }));
+        const result = await analyzeBatch(settings, batchIndex, requests);
+        const resultByFileId = new Map(
+          result.results.map((analysisResult) => [analysisResult.fileId, analysisResult])
+        );
 
-        const result = await analyzeBatch(settings, batches.indexOf(batch), requests);
+        setFiles((currentFiles) => {
+          const filesWithResults = currentFiles.map((file) => {
+            if (!batchFileIds.has(file.id)) {
+              return file;
+            }
 
-        result.results.forEach((analysisResult: { fileId: string; suggestedName?: string; normalizedName?: string; error?: string }) => {
-          updateFile(analysisResult.fileId, {
-            suggestedName: analysisResult.suggestedName,
-            normalizedName: analysisResult.normalizedName,
-            error: analysisResult.error,
-            status: 'unanalyzed',
+            const analysisResult = resultByFileId.get(file.id);
+            if (!analysisResult) {
+              return {
+                ...file,
+                status: 'failed' as const,
+                error: 'LLM 响应中缺少此文件',
+              };
+            }
+
+            const resultError = analysisResult.error
+              ?? (!analysisResult.suggestedName
+                ? 'LLM 响应中缺少建议名称'
+                : !analysisResult.normalizedName
+                  ? '建议名称无法通过校验'
+                  : undefined);
+
+            return {
+              ...file,
+              suggestedName: analysisResult.suggestedName,
+              normalizedName: analysisResult.normalizedName,
+              error: resultError,
+              status: resultError ? 'failed' as const : 'ready' as const,
+            };
           });
+
+          return recomputeFileStatuses(filesWithResults);
         });
 
-        setAnalysisProgress({ completedBatches: analysisProgress.completedBatches + 1 });
+        setAnalysisProgress((previousProgress) => ({
+          completedBatches: previousProgress.completedBatches + 1,
+        }));
       } catch (error) {
-        batch.forEach((file) => {
-          updateFile(file.id, {
-            status: 'analysisFailed',
-            error: `批次失败：${error}`,
-          });
-        });
+        console.error(`批次 ${batchIndex} 失败:`, error);
+        setFiles((currentFiles) =>
+          recomputeFileStatuses(
+            currentFiles.map((file) =>
+              batchFileIds.has(file.id)
+                ? {
+                    ...file,
+                    status: 'failed' as const,
+                    error: `批次失败：${error}`,
+                  }
+                : file
+            )
+          )
+        );
 
-        setAnalysisProgress({ failedBatches: analysisProgress.failedBatches + 1 });
+        setAnalysisProgress((previousProgress) => ({
+          failedBatches: previousProgress.failedBatches + 1,
+        }));
       }
+    };
+
+    let nextBatchIndex = 0;
+    const runWorker = async () => {
+      while (true) {
+        if (nextBatchIndex >= batches.length) {
+          return;
+        }
+
+        await waitUntilAnalysisResumes();
+
+        if (nextBatchIndex >= batches.length) {
+          return;
+        }
+
+        const claimedBatchIndex = nextBatchIndex;
+        nextBatchIndex += 1;
+        await processBatch(claimedBatchIndex);
+      }
+    };
+
+    const workerCount = Math.min(settings.concurrency, batches.length);
+    try {
+      await Promise.all(
+        Array.from({ length: workerCount }, () => runWorker())
+      );
+    } finally {
+      isAnalysisPausedRef.current = false;
+      releasePausedWorkers();
+      setAnalysisProgress({ isRunning: false, isPaused: false });
     }
-
-    const updatedFiles = files.map((file) => ({
-      ...file,
-      status: deriveFileStatus(file, files),
-    }));
-    updateFiles(updatedFiles);
-
-    setAnalysisProgress({ isRunning: false });
   };
 
   const handleExecute = async () => {
-    const executableFiles = files.filter((file) => file.status === 'normal');
+    const executableFiles = files.filter((file) => file.status === 'ready');
     
     if (executableFiles.length === 0) {
       alert('没有可执行的文件');
@@ -158,13 +291,21 @@ export default function Toolbar() {
     }
   };
 
-  const selectedUnanalyzedCount = files.filter(f => f.selected && f.status === 'unanalyzed').length;
-  const executableCount = files.filter(f => f.status === 'normal').length;
+  const selectedAnalyzableCount = files.filter(
+    (file) => file.selected && (file.status === 'pending' || file.status === 'failed')
+  ).length;
+  const executableCount = files.filter((file) => file.status === 'ready').length;
+  const processedBatchCount =
+    analysisProgress.completedBatches + analysisProgress.failedBatches;
 
   return (
     <>
       <div className="toolbar">
-        <button className="btn" onClick={handleSelectDirectory} disabled={isScanning}>
+        <button
+          className="btn"
+          onClick={handleSelectDirectory}
+          disabled={isScanning || analysisProgress.isRunning}
+        >
           {isScanning ? '扫描中...' : '选择目录'}
         </button>
         
@@ -177,23 +318,41 @@ export default function Toolbar() {
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
           <button 
             className="btn" 
+            onClick={() => setShowLogger(true)}
+          >
+            日志
+          </button>
+          
+          <button 
+            className="btn" 
             onClick={() => setShowSettings(true)}
           >
             设置
           </button>
           
-          <button 
-            className="btn" 
-            onClick={handleAnalyzeAll} 
-            disabled={!settings || selectedUnanalyzedCount === 0 || analysisProgress.isRunning}
+          <button
+            className="btn"
+            onClick={handleAnalyzeAll}
+            disabled={!settings || selectedAnalyzableCount === 0 || analysisProgress.isRunning}
           >
-            {analysisProgress.isRunning ? `分析中 ${analysisProgress.completedBatches}/${analysisProgress.totalBatches}` : `分析已选 (${selectedUnanalyzedCount})`}
+            {analysisProgress.isRunning
+              ? `${analysisProgress.isPaused ? '已暂停' : '分析中'} ${processedBatchCount}/${analysisProgress.totalBatches}`
+              : `分析已选 (${selectedAnalyzableCount})`}
           </button>
-          
-          <button 
-            className="btn btn-primary" 
-            onClick={handleExecute} 
-            disabled={executableCount === 0}
+
+          {analysisProgress.isRunning && (
+            <button
+              className="btn"
+              onClick={handleToggleAnalysisPause}
+            >
+              {analysisProgress.isPaused ? '继续分析' : '暂停分析'}
+            </button>
+          )}
+
+          <button
+            className="btn btn-primary"
+            onClick={handleExecute}
+            disabled={executableCount === 0 || analysisProgress.isRunning}
           >
             执行重命名 ({executableCount})
           </button>

@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useAppStore } from './store';
 import {
+  collectFileIdsLeavingStatusFilter,
   formatFileSize,
   getStatusLabel,
   recomputeFileStatuses,
@@ -416,36 +417,50 @@ export default function FileList() {
 
   const handleSuggestedNameChange = useCallback(
     (fileId: string, inputValue: string) => {
-      if (activeStatusFilter !== 'all') {
-        setRetainedEditedFileIds((currentFileIds) => {
-          if (currentFileIds.has(fileId)) {
-            return currentFileIds;
-          }
-
-          const nextFileIds = new Set(currentFileIds);
-          nextFileIds.add(fileId);
-          return nextFileIds;
-        });
-      }
-
       const suggestedName = stripTxtExtension(inputValue);
       const validation = validateSuggestedName(suggestedName);
+      const currentFiles = useAppStore.getState().files;
 
-      setFiles((currentFiles) => {
-        const editedFiles = currentFiles.map((file) =>
-          file.id === fileId
-            ? {
-                ...file,
-                suggestedName,
-                normalizedName: validation.normalizedName,
-                error: validation.error,
-                status: validation.error ? 'failed' as const : 'ready' as const,
-              }
-            : file
+      const editedFiles = currentFiles.map((file) =>
+        file.id === fileId
+          ? {
+              ...file,
+              suggestedName,
+              normalizedName: validation.normalizedName,
+              error: validation.error,
+              status: validation.error ? 'failed' as const : 'ready' as const,
+            }
+          : file
+      );
+      const nextFiles = recomputeFileStatuses(editedFiles);
+
+      // 冲突等状态会级联变化：不仅保留被编辑行，也保留因本次编辑而离开当前筛选的行。
+      // 先更新暂留集合，再写回文件列表，避免筛选列表闪一下。
+      if (activeStatusFilter !== 'all') {
+        const fileIdsLeavingFilter = collectFileIdsLeavingStatusFilter(
+          currentFiles,
+          nextFiles,
+          activeStatusFilter
         );
 
-        return recomputeFileStatuses(editedFiles);
-      });
+        if (fileIdsLeavingFilter.length > 0) {
+          setRetainedEditedFileIds((currentFileIds) => {
+            let didAddRetainedFileId = false;
+            const nextFileIds = new Set(currentFileIds);
+
+            for (const retainedFileId of fileIdsLeavingFilter) {
+              if (!nextFileIds.has(retainedFileId)) {
+                nextFileIds.add(retainedFileId);
+                didAddRetainedFileId = true;
+              }
+            }
+
+            return didAddRetainedFileId ? nextFileIds : currentFileIds;
+          });
+        }
+      }
+
+      setFiles(nextFiles);
     },
     [activeStatusFilter, setFiles]
   );

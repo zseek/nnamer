@@ -169,6 +169,33 @@ export function getSelectedExecutableFiles(files: FileItem[]): FileItem[] {
   return files.filter((file) => file.selected && file.status === 'ready');
 }
 
+export function collectFileIdsLeavingStatusFilter(
+  previousFiles: FileItem[],
+  nextFiles: FileItem[],
+  activeStatusFilter: FileStatus
+): string[] {
+  const previousStatusByFileId = new Map(
+    previousFiles.map((file) => [file.id, file.status])
+  );
+  const fileIdsLeavingFilter: string[] = [];
+
+  for (const nextFile of nextFiles) {
+    const previousStatus = previousStatusByFileId.get(nextFile.id);
+    if (previousStatus === undefined) {
+      continue;
+    }
+
+    const wasMatchingFilter = previousStatus === activeStatusFilter;
+    const stillMatchingFilter = nextFile.status === activeStatusFilter;
+
+    if (wasMatchingFilter && !stillMatchingFilter) {
+      fileIdsLeavingFilter.push(nextFile.id);
+    }
+  }
+
+  return fileIdsLeavingFilter;
+}
+
 export function groupFilesByConflict(files: FileItem[]): ConflictGroup[] {
   const conflictMap = new Map<string, FileItem[]>();
 

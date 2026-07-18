@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FileItem } from '../types';
 import {
+  collectFileIdsLeavingStatusFilter,
   createConflictCleanupPlan,
   getSelectedExecutableFiles,
   recomputeFileStatuses,
@@ -71,6 +72,98 @@ describe('getSelectedExecutableFiles', () => {
     expect(getSelectedExecutableFiles(files).map((file) => file.id)).toEqual([
       'selected-ready',
     ]);
+  });
+});
+
+describe('collectFileIdsLeavingStatusFilter', () => {
+  it('retains every conflict member that leaves the filter after one rename', () => {
+    const previousFiles = [
+      createFile('edited', {
+        suggestedName: '相同书名',
+        normalizedName: '相同书名',
+        status: 'conflict',
+      }),
+      createFile('sibling', {
+        suggestedName: '相同书名',
+        normalizedName: '相同书名',
+        status: 'conflict',
+      }),
+      createFile('unrelated-conflict-a', {
+        suggestedName: '另一冲突',
+        normalizedName: '另一冲突',
+        status: 'conflict',
+      }),
+      createFile('unrelated-conflict-b', {
+        suggestedName: '另一冲突',
+        normalizedName: '另一冲突',
+        status: 'conflict',
+      }),
+      createFile('unrelated-ready', {
+        suggestedName: '无关可执行',
+        normalizedName: '无关可执行',
+        status: 'ready',
+      }),
+    ];
+
+    const nextFiles = recomputeFileStatuses(
+      previousFiles.map((file) =>
+        file.id === 'edited'
+          ? {
+              ...file,
+              suggestedName: '新书名',
+              normalizedName: '新书名',
+              status: 'ready' as const,
+            }
+          : file
+      )
+    );
+
+    expect(nextFiles.map((file) => file.status)).toEqual([
+      'ready',
+      'ready',
+      'conflict',
+      'conflict',
+      'ready',
+    ]);
+    expect(
+      collectFileIdsLeavingStatusFilter(previousFiles, nextFiles, 'conflict')
+    ).toEqual(['edited', 'sibling']);
+  });
+
+  it('retains both files when a ready-list edit creates a new conflict pair', () => {
+    const previousFiles = [
+      createFile('edited', {
+        suggestedName: '书名甲',
+        normalizedName: '书名甲',
+        status: 'ready',
+      }),
+      createFile('target', {
+        suggestedName: '书名乙',
+        normalizedName: '书名乙',
+        status: 'ready',
+      }),
+    ];
+
+    const nextFiles = recomputeFileStatuses(
+      previousFiles.map((file) =>
+        file.id === 'edited'
+          ? {
+              ...file,
+              suggestedName: '书名乙',
+              normalizedName: '书名乙',
+              status: 'ready' as const,
+            }
+          : file
+      )
+    );
+
+    expect(nextFiles.map((file) => file.status)).toEqual([
+      'conflict',
+      'conflict',
+    ]);
+    expect(
+      collectFileIdsLeavingStatusFilter(previousFiles, nextFiles, 'ready')
+    ).toEqual(['edited', 'target']);
   });
 });
 

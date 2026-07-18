@@ -73,22 +73,19 @@ impl AppSettings {
         if self.model.trim().is_empty() {
             return Err(AppError::Validation("模型名称不能为空".to_string()));
         }
-        if !(10..=20).contains(&self.batch_size) {
+        if self.batch_size == 0 {
             return Err(AppError::Validation(
-                "每批文件数必须在 10 到 20 之间".to_string(),
+                "每批文件数必须大于 0".to_string(),
             ));
         }
-        if !(5..=300).contains(&self.timeout_seconds) {
+        if self.timeout_seconds == 0 {
             return Err(AppError::Validation(
-                "请求超时必须在 5 到 300 秒之间".to_string(),
+                "请求超时必须大于 0 秒".to_string(),
             ));
         }
-        if self.max_retries > 5 {
-            return Err(AppError::Validation("最大重试次数不能超过 5".to_string()));
-        }
-        if !(1..=10).contains(&self.concurrency) {
+        if self.concurrency == 0 {
             return Err(AppError::Validation(
-                "并发数必须在 1 到 10 之间".to_string(),
+                "并发数必须大于 0".to_string(),
             ));
         }
         if self.prompt.trim().is_empty() {
@@ -136,24 +133,39 @@ mod tests {
     use super::{AppSettings, DEFAULT_CONCURRENCY};
 
     #[test]
-    fn validates_batch_size_range() {
+    fn rejects_zero_batch_size() {
         let settings = AppSettings {
-            batch_size: 9,
+            batch_size: 0,
             ..AppSettings::default()
         };
         assert!(settings.validate().is_err());
     }
 
     #[test]
-    fn validates_concurrency_range() {
+    fn accepts_analysis_parameters_outside_previous_ranges() {
+        let settings = AppSettings {
+            batch_size: 50,
+            timeout_seconds: 600,
+            max_retries: 20,
+            concurrency: 25,
+            ..AppSettings::default()
+        };
+        assert!(settings.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_zero_concurrency() {
         let settings = AppSettings {
             concurrency: 0,
             ..AppSettings::default()
         };
         assert!(settings.validate().is_err());
+    }
 
+    #[test]
+    fn rejects_zero_timeout() {
         let settings = AppSettings {
-            concurrency: 11,
+            timeout_seconds: 0,
             ..AppSettings::default()
         };
         assert!(settings.validate().is_err());

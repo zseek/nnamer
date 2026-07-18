@@ -270,12 +270,11 @@ export default function SettingsDialog({
                   value={formData.batchSize}
                   onChange={(event) => setFormData({
                     ...formData,
-                    batchSize: Number.parseInt(event.target.value, 10) || 15,
+                    batchSize: Number.parseInt(event.target.value, 10) || 1,
                   })}
-                  min="10"
-                  max="20"
+                  min="1"
                 />
-                <span className="settings-field-hint">每批 10 至 20 个文件</span>
+                <span className="settings-field-hint">每次请求包含的文件数量</span>
               </label>
 
               <label className="settings-parameter-field">
@@ -290,9 +289,8 @@ export default function SettingsDialog({
                     maxRetries: Number.parseInt(event.target.value, 10) || 0,
                   })}
                   min="0"
-                  max="5"
                 />
-                <span className="settings-field-hint">失败后额外重试 0 至 5 次</span>
+                <span className="settings-field-hint">请求失败后的额外重试次数</span>
               </label>
 
               <label className="settings-parameter-field">
@@ -307,9 +305,8 @@ export default function SettingsDialog({
                     concurrency: Number.parseInt(event.target.value, 10) || 1,
                   })}
                   min="1"
-                  max="10"
                 />
-                <span className="settings-field-hint">同时执行 1 至 10 个批次</span>
+                <span className="settings-field-hint">同时执行的批次数量</span>
               </label>
 
               <label className="settings-parameter-field">
@@ -321,12 +318,11 @@ export default function SettingsDialog({
                   value={formData.timeoutSeconds}
                   onChange={(event) => setFormData({
                     ...formData,
-                    timeoutSeconds: Number.parseInt(event.target.value, 10) || 60,
+                    timeoutSeconds: Number.parseInt(event.target.value, 10) || 1,
                   })}
-                  min="5"
-                  max="300"
+                  min="1"
                 />
-                <span className="settings-field-hint">单次请求 5 至 300 秒</span>
+                <span className="settings-field-hint">单次请求超时时间（秒）</span>
               </label>
             </div>
           </section>

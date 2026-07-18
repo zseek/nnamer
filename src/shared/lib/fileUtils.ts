@@ -97,7 +97,7 @@ export function deriveFileStatus(
 
   const normalizedOriginal = file.originalStem.trim().toLocaleLowerCase();
   if (normalizedSuggested === normalizedOriginal) {
-    return 'unchanged';
+    return file.hasBeenRenamed ? 'renamed' : 'unchanged';
   }
 
   return 'ready';
@@ -159,7 +159,7 @@ function deriveFileStatusFromCounts(
 
   const canonicalOriginalName = file.originalStem.trim().toLocaleLowerCase();
   if (canonicalName === canonicalOriginalName) {
-    return 'unchanged';
+    return file.hasBeenRenamed ? 'renamed' : 'unchanged';
   }
 
   return 'ready';
@@ -167,6 +167,32 @@ function deriveFileStatusFromCounts(
 
 export function getSelectedExecutableFiles(files: FileItem[]): FileItem[] {
   return files.filter((file) => file.selected && file.status === 'ready');
+}
+
+export function applySuccessfulFileRenames(
+  files: FileItem[],
+  renamedFileTargetById: ReadonlyMap<string, string>
+): FileItem[] {
+  const filesWithSuccessfulRenames = files.map((file) => {
+    const targetStem = renamedFileTargetById.get(file.id);
+    if (!targetStem) {
+      return file;
+    }
+
+    return {
+      ...file,
+      originalName: `${targetStem}.txt`,
+      originalStem: targetStem,
+      suggestedName: targetStem,
+      normalizedName: targetStem,
+      error: undefined,
+      status: 'renamed' as const,
+      selected: false,
+      hasBeenRenamed: true,
+    };
+  });
+
+  return recomputeFileStatuses(filesWithSuccessfulRenames);
 }
 
 export function collectFileIdsLeavingStatusFilter(
@@ -294,6 +320,7 @@ export function getStatusLabel(status: FileStatus): string {
     analyzing: '分析中',
     ready: '可执行',
     unchanged: '无需修改',
+    renamed: '已重命名',
     conflict: '冲突',
     failed: '失败',
   };
@@ -306,6 +333,7 @@ export function getStatusColor(status: FileStatus): string {
     analyzing: 'text-blue-600',
     ready: 'text-green-600',
     unchanged: 'text-gray-500',
+    renamed: 'text-blue-600',
     conflict: 'text-orange-600',
     failed: 'text-red-600',
   };

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FileItem } from '../types';
 import {
+  applySuccessfulFileRenames,
   collectFileIdsLeavingStatusFilter,
   createConflictCleanupPlan,
   getSelectedExecutableFiles,
@@ -71,6 +72,114 @@ describe('getSelectedExecutableFiles', () => {
 
     expect(getSelectedExecutableFiles(files).map((file) => file.id)).toEqual([
       'selected-ready',
+    ]);
+  });
+});
+
+describe('applySuccessfulFileRenames', () => {
+  it('keeps successful files in the list with their current disk names', () => {
+    const renamedFile = createFile('rename-success', {
+      originalName: '旧书名.txt',
+      originalStem: '旧书名',
+      suggestedName: '新书名',
+      normalizedName: '新书名',
+      status: 'ready',
+      selected: true,
+    });
+    const unrelatedFile = createFile('unrelated', {
+      originalStem: '另一文件',
+      suggestedName: '另一书名',
+      normalizedName: '另一书名',
+      status: 'ready',
+    });
+
+    const nextFiles = applySuccessfulFileRenames(
+      [renamedFile, unrelatedFile],
+      new Map([['rename-success', '新书名']])
+    );
+
+    expect(nextFiles).toHaveLength(2);
+    expect(nextFiles[0]).toMatchObject({
+      originalName: '新书名.txt',
+      originalStem: '新书名',
+      suggestedName: '新书名',
+      normalizedName: '新书名',
+      status: 'renamed',
+      selected: false,
+      hasBeenRenamed: true,
+    });
+    expect(nextFiles[1]).toBe(unrelatedFile);
+  });
+
+  it('allows a successfully renamed file to be renamed again', () => {
+    const previouslyRenamedFile = createFile('rename-again', {
+      originalName: '第一次书名.txt',
+      originalStem: '第一次书名',
+      suggestedName: '第二次书名',
+      normalizedName: '第二次书名',
+      status: 'ready',
+      selected: true,
+      hasBeenRenamed: true,
+    });
+
+    const nextFiles = applySuccessfulFileRenames(
+      [previouslyRenamedFile],
+      new Map([['rename-again', '第二次书名']])
+    );
+
+    expect(nextFiles[0]).toMatchObject({
+      originalName: '第二次书名.txt',
+      originalStem: '第二次书名',
+      status: 'renamed',
+      selected: false,
+      hasBeenRenamed: true,
+    });
+  });
+});
+
+describe('renamed file conflict lifecycle', () => {
+  it('moves renamed files into conflict and restores them after resolution', () => {
+    const renamedFile = createFile('renamed', {
+      originalName: '已占用书名.txt',
+      originalStem: '已占用书名',
+      suggestedName: '已占用书名',
+      normalizedName: '已占用书名',
+      status: 'renamed',
+      hasBeenRenamed: true,
+    });
+    const editableFile = createFile('editable', {
+      originalStem: '待改文件',
+      suggestedName: '其它书名',
+      normalizedName: '其它书名',
+      status: 'ready',
+    });
+
+    const conflictingFiles = recomputeFileStatuses([
+      renamedFile,
+      {
+        ...editableFile,
+        suggestedName: '已占用书名',
+        normalizedName: '已占用书名',
+      },
+    ]);
+
+    expect(conflictingFiles.map((file) => file.status)).toEqual([
+      'conflict',
+      'conflict',
+    ]);
+
+    const resolvedFiles = recomputeFileStatuses([
+      conflictingFiles[0],
+      {
+        ...conflictingFiles[1],
+        suggestedName: '全新书名',
+        normalizedName: '全新书名',
+      },
+    ]);
+
+    expect(resolvedFiles.map((file) => file.status)).toEqual([
+      'renamed',
+      'ready',
     ]);
   });
 });

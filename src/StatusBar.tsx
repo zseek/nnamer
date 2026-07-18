@@ -17,6 +17,7 @@ const STATUS_LABELS: Record<FileStatus, string> = {
   analyzing: '分析中',
   ready: '可执行',
   unchanged: '无需修改',
+  renamed: '已重命名',
   conflict: '冲突',
   failed: '失败',
 };
@@ -30,6 +31,7 @@ export default function StatusBar() {
     analyzing: 0,
     ready: 0,
     unchanged: 0,
+    renamed: 0,
     conflict: 0,
     failed: 0,
   };

@@ -96,6 +96,7 @@ const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
   { value: 'analyzing', label: '分析中' },
   { value: 'ready', label: '可执行' },
   { value: 'unchanged', label: '无需修改' },
+  { value: 'renamed', label: '已重命名' },
   { value: 'conflict', label: '冲突' },
   { value: 'failed', label: '失败' },
 ];
@@ -105,6 +106,7 @@ const STATUS_CLASSES: Record<FileStatus, string> = {
   analyzing: 'status-analyzing',
   ready: 'status-ready',
   unchanged: 'status-unchanged',
+  renamed: 'status-renamed',
   conflict: 'status-conflict',
   failed: 'status-failed',
 };
@@ -274,6 +276,7 @@ export default function FileList() {
       analyzing: 0,
       ready: 0,
       unchanged: 0,
+      renamed: 0,
       conflict: 0,
       failed: 0,
     };

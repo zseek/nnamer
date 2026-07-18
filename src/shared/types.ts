@@ -3,6 +3,7 @@ export type FileStatus =
   | 'analyzing'
   | 'ready'
   | 'unchanged'
+  | 'renamed'
   | 'conflict'
   | 'failed';
 
@@ -35,6 +36,7 @@ export interface FileItem {
   modifiedAt: number;
   status: FileStatus;
   selected: boolean;
+  hasBeenRenamed?: boolean;
   suggestedName?: string;
   normalizedName?: string;
   error?: string;

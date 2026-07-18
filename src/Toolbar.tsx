@@ -8,8 +8,8 @@ import {
   scanDirectory,
 } from './shared/lib/api';
 import {
+  applySuccessfulFileRenames,
   createConflictCleanupPlan,
-  formatFileSize,
   getSelectedExecutableFiles,
   recomputeFileStatuses,
 } from './shared/lib/fileUtils';
@@ -40,7 +40,6 @@ export default function Toolbar() {
     setFiles,
     files,
     settings,
-    removeFiles,
     setAnalysisProgress,
     analysisProgress,
     setShowLogger,
@@ -218,6 +217,7 @@ export default function Toolbar() {
           const filesWithDefaults: FileItem[] = scannedFiles.map((file) => ({
             ...file,
             selected: false,
+            hasBeenRenamed: false,
             status: 'pending',
           }));
           setFiles(filesWithDefaults);
@@ -579,14 +579,16 @@ export default function Toolbar() {
       const filesByOriginalName = new Map(
         selectedExecutableFiles.map((file) => [file.originalName, file])
       );
-      const successfulFileIds = Array.from(
-        new Set(
-          results.flatMap((result) => {
-            const matchedFile = filesByOriginalName.get(result.fileId);
-            return result.success && matchedFile ? [matchedFile.id] : [];
-          })
-        )
-      );
+      const successfulFileTargetById = new Map<string, string>();
+
+      for (const result of results) {
+        const matchedFile = filesByOriginalName.get(result.fileId);
+        if (result.success && matchedFile?.normalizedName) {
+          successfulFileTargetById.set(matchedFile.id, matchedFile.normalizedName);
+        }
+      }
+
+      const successfulFileIds = Array.from(successfulFileTargetById.keys());
       const failedResults = results.filter((result) => !result.success);
       const missingResultCount = Math.max(
         0,
@@ -598,7 +600,9 @@ export default function Toolbar() {
       );
 
       if (successfulFileIds.length > 0) {
-        removeFiles(successfulFileIds);
+        setFiles((currentFiles) =>
+          applySuccessfulFileRenames(currentFiles, successfulFileTargetById)
+        );
       }
 
       if (failureCount === 0) {
@@ -606,7 +610,7 @@ export default function Toolbar() {
           {
             tone: 'success',
             title: '重命名完成',
-            message: `已成功重命名 ${successfulFileIds.length} 个文件。`,
+            message: `已成功重命名 ${successfulFileIds.length} 个文件，并保留为“已重命名”状态。`,
           },
           4500
         );
@@ -624,7 +628,7 @@ export default function Toolbar() {
         {
           tone: successfulFileIds.length > 0 ? 'warning' : 'error',
           title: successfulFileIds.length > 0 ? '部分文件未能重命名' : '重命名未完成',
-          message: `成功 ${successfulFileIds.length} 个，失败 ${failureCount} 个。未成功的文件已保留在列表中。`,
+          message: `成功 ${successfulFileIds.length} 个，失败 ${failureCount} 个。成功文件已标记为“已重命名”，失败文件仍保留以便检查。`,
           detail: failureDetail,
         },
         8000
@@ -674,11 +678,6 @@ export default function Toolbar() {
   ).length;
   const selectedExecutableCount = getSelectedExecutableFiles(files).length;
   const conflictFileCount = files.filter((file) => file.status === 'conflict').length;
-  const conflictCleanupPreviewGroups = conflictCleanupPlan.resolvableGroups.slice(0, 5);
-  const hiddenConflictCleanupGroupCount = Math.max(
-    0,
-    conflictCleanupPlan.resolvableGroups.length - conflictCleanupPreviewGroups.length
-  );
   const isFileOperationRunning = isRenaming || isCleaningConflicts;
   const processedBatchCount =
     analysisProgress.completedBatches + analysisProgress.failedBatches;
@@ -832,7 +831,7 @@ export default function Toolbar() {
             </div>
 
             <div className="operation-confirmation-notice">
-              执行前会再次校验文件状态。成功项目将从列表移除，未成功项目会保留以便检查。
+              执行前会再次校验文件状态。成功项目将标记为“已重命名”并继续参与冲突检测，未成功项目会保留以便检查。
             </div>
 
             <div className="operation-confirmation-actions">
@@ -883,47 +882,13 @@ export default function Toolbar() {
 
             <div className="conflict-cleanup-summary-grid">
               <div className="conflict-cleanup-summary-item">
-                <span>可处理冲突组</span>
+                <span>待处理冲突组</span>
                 <strong>{conflictCleanupPlan.resolvableGroups.length}</strong>
               </div>
               <div className="conflict-cleanup-summary-item is-removal">
-                <span>移入回收站</span>
+                <span>待删除文件</span>
                 <strong>{conflictCleanupPlan.filesToRemove.length}</strong>
               </div>
-            </div>
-
-            <div className="conflict-cleanup-preview" aria-label="冲突清理预览">
-              {conflictCleanupPreviewGroups.map((conflictGroup) => (
-                <div
-                  key={conflictGroup.normalizedName.toLocaleLowerCase()}
-                  className="conflict-cleanup-group"
-                >
-                  <div
-                    className="conflict-cleanup-name"
-                    title={conflictGroup.normalizedName}
-                  >
-                    {conflictGroup.normalizedName}
-                  </div>
-                  <div className="conflict-cleanup-retained">
-                    <span className="conflict-cleanup-retained-label">保留</span>
-                    <span
-                      className="conflict-cleanup-retained-file"
-                      title={conflictGroup.retainedFile.originalName}
-                    >
-                      {conflictGroup.retainedFile.originalName}
-                    </span>
-                    <strong>{formatFileSize(conflictGroup.retainedFile.sizeBytes)}</strong>
-                  </div>
-                  <div className="conflict-cleanup-removal-count">
-                    移除其余 {conflictGroup.filesToRemove.length} 个较小文件
-                  </div>
-                </div>
-              ))}
-              {hiddenConflictCleanupGroupCount > 0 && (
-                <div className="conflict-cleanup-more">
-                  另有 {hiddenConflictCleanupGroupCount} 组将按相同规则处理
-                </div>
-              )}
             </div>
 
             {conflictCleanupPlan.skippedGroups.length > 0 && (

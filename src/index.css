@@ -812,6 +812,12 @@
   color: hsl(215 20% 36%);
 }
 
+.file-status-renamed {
+  border-color: hsl(268 72% 55% / 0.2);
+  background: hsl(268 72% 55% / 0.08);
+  color: hsl(268 58% 38%);
+}
+
 .file-status-conflict {
   border-color: hsl(var(--color-warning) / 0.24);
   background: hsl(var(--color-warning) / 0.11);
@@ -836,5 +842,6 @@
 .status-analyzing { background: hsl(var(--color-primary)); }
 .status-ready { background: hsl(var(--color-success)); }
 .status-unchanged { background: hsl(215 16% 47%); }
+.status-renamed { background: hsl(268 72% 55%); }
 .status-conflict { background: hsl(var(--color-warning)); }
 .status-failed { background: hsl(var(--color-error)); }

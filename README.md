@@ -76,9 +76,9 @@ pnpm tauri build
    - 较小的文件将被移入回收站
 
 5. **执行重命名**
-   - 勾选要重命名的文件
-   - 点击"执行重命名"
-   - 确认操作完成
+   - 勾选状态为“可执行”的文件
+   - 点击“执行重命名”
+   - 成功文件会保留为“已重命名”，继续参与后续冲突检测
 
 ## 🏗️ 技术栈
 
@@ -133,12 +133,15 @@ Nnamer/
 
 ```
 pending → analyzing → ready / unchanged / conflict / failed
+ready → renamed
+renamed ↔ conflict
 ```
 
 - **pending**: 待分析
 - **analyzing**: 正在等待 LLM 响应
 - **ready**: 建议名称有效、与源名称不同且没有冲突，可以执行重命名
 - **unchanged**: 建议名称与源文件名一致，无需执行重命名
+- **renamed**: 文件已在磁盘上成功重命名，条目继续参与后续冲突检测
 - **conflict**: 多个文件使用了相同的建议名称，需要修改后才能执行
 - **failed**: API、解析或名称校验失败，详细原因保存在错误信息中
 

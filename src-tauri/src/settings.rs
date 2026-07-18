@@ -49,14 +49,17 @@ impl Default for AppSettings {
 - "id": 文件的唯一标识符（与输入完全一致）
 - "suggested_name": 识别出的书名（纯文本，不含扩展名）
 
-**示例：**
-输入文件名："[顶点小说]诡秘之主(全本)作者爱潜水的乌贼"
-输出：{"id": "file-001", "suggested_name": "诡秘之主"}
-
-**重要：**
-1. 必须包含所有输入文件，一个都不能遗漏
-2. 只返回 JSON 数组，不要任何其他文字说明
-3. 确保 JSON 格式正确可解析"#
+**输入输出示例：**
+输入格式：
+[
+  {"id": "b8c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e", "filename": "[笔趣阁]诡秘之主(全本)作者爱潜水的乌贼"},
+  {"id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "filename": "斗破苍穹-天蚕土豆【完结】"}
+]
+输出格式：
+[
+  {"id": "b8c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e", "suggested_name": "诡秘之主"},
+  {"id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "suggested_name": "斗破苍穹"}
+]"#
                     .to_string(),
         }
     }

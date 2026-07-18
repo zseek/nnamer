@@ -51,6 +51,21 @@ export interface AppSettings {
   prompt: string;
 }
 
+export interface RecycleBinOperation {
+  fileId: string;
+  originalName: string;
+  sizeBytes: number;
+  modifiedAt: number;
+}
+
+export interface FileOperationResult {
+  fileId: string;
+  success: boolean;
+  error?: string;
+}
+
+export type RenameResult = FileOperationResult;
+
 export interface AnalysisProgress {
   totalBatches: number;
   completedBatches: number;
@@ -63,4 +78,16 @@ export interface ConflictGroup {
   normalizedName: string;
   files: FileItem[];
   largestFileId?: string;
+}
+
+export interface ResolvableConflictGroup {
+  normalizedName: string;
+  retainedFile: FileItem;
+  filesToRemove: FileItem[];
+}
+
+export interface ConflictCleanupPlan {
+  resolvableGroups: ResolvableConflictGroup[];
+  skippedGroups: ConflictGroup[];
+  filesToRemove: FileItem[];
 }

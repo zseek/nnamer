@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useAppStore } from './store';
 import {
+  formatFileSize,
   getStatusLabel,
   recomputeFileStatuses,
   stripTxtExtension,
   validateSuggestedName,
 } from './shared/lib/fileUtils';
-import type { FileStatus } from './shared/types';
+import type { FileItem, FileStatus } from './shared/types';
 
 const styles: { [key: string]: React.CSSProperties } = {
   container: {
@@ -31,20 +33,13 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: 'hsl(var(--color-text-secondary))',
     fontSize: '11px',
   },
-  filterButton: {
-    minHeight: '26px',
-    padding: '3px 9px',
-    border: '1px solid transparent',
-    borderRadius: '4px',
-    background: 'transparent',
-    color: 'hsl(var(--color-text-secondary))',
-    fontSize: '11px',
-  },
-  filterButtonActive: {
-    borderColor: 'hsl(var(--color-border))',
-    background: 'hsl(var(--color-background))',
-    color: 'hsl(var(--color-text))',
-    fontWeight: 600,
+  filterGroup: {
+    display: 'inline-flex',
+    alignItems: 'stretch',
+    overflow: 'hidden',
+    border: '1px solid hsl(var(--color-border))',
+    borderRadius: '5px',
+    background: 'hsl(var(--color-surface))',
   },
   tableScroller: {
     flex: 1,
@@ -53,19 +48,22 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   table: {
     width: '100%',
+    tableLayout: 'fixed',
     borderCollapse: 'collapse',
     fontSize: '12px',
   },
   th: {
     position: 'sticky',
     top: 0,
-    background: 'hsl(var(--color-background))',
-    padding: '6px 8px',
+    height: '32px',
+    padding: '0 12px',
     textAlign: 'left',
+    verticalAlign: 'middle',
+    background: 'hsl(var(--color-background))',
     borderBottom: '1px solid hsl(var(--color-border))',
-    fontWeight: 600,
-    fontSize: '11px',
     color: 'hsl(var(--color-text-secondary))',
+    fontSize: '11px',
+    fontWeight: 600,
     cursor: 'default',
     userSelect: 'none',
     zIndex: 1,
@@ -75,23 +73,10 @@ const styles: { [key: string]: React.CSSProperties } = {
     userSelect: 'none',
   },
   td: {
-    padding: '8px 12px',
+    height: '40px',
+    padding: '5px 12px',
+    verticalAlign: 'middle',
     borderBottom: '1px solid hsl(var(--color-border))',
-  },
-  row: {
-    cursor: 'default',
-  },
-  input: {
-    width: '100%',
-    padding: '5px 10px',
-    border: '1px solid hsl(var(--color-border))',
-    borderRadius: '4px',
-    fontSize: '13px',
-  },
-  statusCell: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
   },
   filteredEmpty: {
     padding: '32px 12px',
@@ -123,8 +108,155 @@ const STATUS_CLASSES: Record<FileStatus, string> = {
   failed: 'status-failed',
 };
 
+const FILE_ROW_HEIGHT_PIXELS = 40;
+const FILE_LIST_OVERSCAN_ROWS = 10;
+const SUGGESTED_NAME_COMMIT_DELAY_MILLISECONDS = 120;
+
+interface FileTableRowProps {
+  file: FileItem;
+  rowIndex: number;
+  onSelectionChange: (fileId: string, isSelected: boolean) => void;
+  onSelectionToggle: (fileId: string) => void;
+  onSuggestedNameChange: (fileId: string, inputValue: string) => void;
+}
+
+const FileTableRow = memo(function FileTableRow({
+  file,
+  rowIndex,
+  onSelectionChange,
+  onSelectionToggle,
+  onSuggestedNameChange,
+}: FileTableRowProps) {
+  const [suggestedNameInput, setSuggestedNameInput] = useState(
+    file.suggestedName ?? ''
+  );
+  const latestSuggestedNameInputRef = useRef(file.suggestedName ?? '');
+  const committedSuggestedNameInputRef = useRef(file.suggestedName ?? '');
+  const suggestedNameCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+
+  useEffect(() => {
+    const suggestedName = file.suggestedName ?? '';
+    setSuggestedNameInput(suggestedName);
+    latestSuggestedNameInputRef.current = suggestedName;
+    committedSuggestedNameInputRef.current = suggestedName;
+  }, [file.suggestedName]);
+
+  useEffect(() => () => {
+    if (suggestedNameCommitTimerRef.current) {
+      clearTimeout(suggestedNameCommitTimerRef.current);
+    }
+
+    if (
+      latestSuggestedNameInputRef.current
+      !== committedSuggestedNameInputRef.current
+    ) {
+      onSuggestedNameChange(file.id, latestSuggestedNameInputRef.current);
+    }
+  }, [file.id, onSuggestedNameChange]);
+
+  const commitSuggestedName = (inputValue: string) => {
+    if (suggestedNameCommitTimerRef.current) {
+      clearTimeout(suggestedNameCommitTimerRef.current);
+      suggestedNameCommitTimerRef.current = null;
+    }
+
+    if (inputValue === committedSuggestedNameInputRef.current) {
+      return;
+    }
+
+    committedSuggestedNameInputRef.current = inputValue;
+    onSuggestedNameChange(file.id, inputValue);
+  };
+
+  const handleSuggestedNameInput = (inputValue: string) => {
+    setSuggestedNameInput(inputValue);
+    latestSuggestedNameInputRef.current = inputValue;
+
+    if (suggestedNameCommitTimerRef.current) {
+      clearTimeout(suggestedNameCommitTimerRef.current);
+    }
+
+    suggestedNameCommitTimerRef.current = setTimeout(() => {
+      suggestedNameCommitTimerRef.current = null;
+      commitSuggestedName(inputValue);
+    }, SUGGESTED_NAME_COMMIT_DELAY_MILLISECONDS);
+  };
+
+  const handleRowClick = (event: React.MouseEvent<HTMLTableRowElement>) => {
+    const clickedElement = event.target as HTMLElement;
+    const isExcludedSelectionArea = clickedElement.closest(
+      '[data-row-selection-excluded="true"]'
+    );
+
+    if (!isExcludedSelectionArea) {
+      onSelectionToggle(file.id);
+    }
+  };
+
+  return (
+    <tr
+      aria-rowindex={rowIndex}
+      className={`file-row${file.selected ? ' is-selected' : ''}`}
+      onClick={handleRowClick}
+    >
+      <td className="file-checkbox-cell" style={styles.td}>
+        <input
+          className="file-checkbox"
+          data-row-selection-excluded="true"
+          type="checkbox"
+          aria-label={`选择 ${file.originalStem}`}
+          checked={file.selected}
+          onChange={(event) =>
+            onSelectionChange(file.id, event.target.checked)
+          }
+        />
+      </td>
+      <td className="file-original-cell" style={styles.td}>
+        <span
+          className="file-original-name"
+          data-row-selection-excluded="true"
+          title={file.originalStem}
+        >
+          {file.originalStem}
+        </span>
+      </td>
+      <td
+        className="file-suggested-cell"
+        data-row-selection-excluded="true"
+        style={styles.td}
+      >
+        {file.status === 'pending' || file.status === 'analyzing' ? (
+          <span className="file-suggested-placeholder">尚无建议</span>
+        ) : (
+          <input
+            className="file-suggested-input"
+            value={suggestedNameInput}
+            aria-label={`${file.originalStem} 的建议文件名`}
+            title={file.error ?? file.suggestedName}
+            onBlur={() => commitSuggestedName(suggestedNameInput)}
+            onChange={(event) =>
+              handleSuggestedNameInput(event.target.value)
+            }
+          />
+        )}
+      </td>
+      <td className="file-size-cell" style={styles.td}>
+        {formatFileSize(file.sizeBytes)}
+      </td>
+      <td style={styles.td} title={file.error}>
+        <span className={`file-status-badge file-status-${file.status}`}>
+          <span className={`status-dot ${STATUS_CLASSES[file.status]}`} />
+          <span>{getStatusLabel(file.status)}</span>
+        </span>
+      </td>
+    </tr>
+  );
+});
+
 export default function FileList() {
-  const { files, setFiles } = useAppStore();
+  const { currentDirectory, files, setFiles } = useAppStore();
   const [sortField, setSortField] = useState<SortField>(null);
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [activeStatusFilter, setActiveStatusFilter] = useState<StatusFilter>('all');
@@ -132,6 +264,7 @@ export default function FileList() {
     () => new Set()
   );
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
+  const tableScrollerRef = useRef<HTMLDivElement>(null);
 
   const statusCounts = useMemo<Record<StatusFilter, number>>(() => {
     const counts: Record<StatusFilter, number> = {
@@ -183,6 +316,21 @@ export default function FileList() {
     });
   }, [filteredFiles, sortField, sortOrder]);
 
+  const fileVirtualizer = useVirtualizer({
+    count: sortedFiles.length,
+    getScrollElement: () => tableScrollerRef.current,
+    estimateSize: () => FILE_ROW_HEIGHT_PIXELS,
+    getItemKey: (rowIndex) => sortedFiles[rowIndex]?.id ?? rowIndex,
+    overscan: FILE_LIST_OVERSCAN_ROWS,
+  });
+  const virtualRows = fileVirtualizer.getVirtualItems();
+  const firstVirtualRow = virtualRows[0];
+  const lastVirtualRow = virtualRows[virtualRows.length - 1];
+  const virtualPaddingTop = firstVirtualRow?.start ?? 0;
+  const virtualPaddingBottom = lastVirtualRow
+    ? fileVirtualizer.getTotalSize() - lastVirtualRow.end
+    : 0;
+
   const selectedFilteredCount = filteredFiles.reduce(
     (selectedCount, file) => selectedCount + Number(file.selected),
     0
@@ -193,10 +341,119 @@ export default function FileList() {
     selectedFilteredCount > 0 && !areAllFilteredFilesSelected;
 
   useEffect(() => {
+    if (currentDirectory !== null) {
+      return;
+    }
+
+    setSortField(null);
+    setSortOrder('asc');
+    setActiveStatusFilter('all');
+    setRetainedEditedFileIds(new Set());
+  }, [currentDirectory]);
+
+  useEffect(() => {
     if (selectAllCheckboxRef.current) {
       selectAllCheckboxRef.current.indeterminate = areSomeFilteredFilesSelected;
     }
   }, [areSomeFilteredFilesSelected]);
+
+  useEffect(() => {
+    tableScrollerRef.current?.scrollTo({ top: 0 });
+  }, [activeStatusFilter, sortField, sortOrder]);
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortOrder('asc');
+    }
+  };
+
+  const handleSelectAll = (checked: boolean) => {
+    const filteredFileIds = new Set(filteredFiles.map((file) => file.id));
+    setFiles((currentFiles) =>
+      currentFiles.map((file) => {
+        if (!filteredFileIds.has(file.id) || file.selected === checked) {
+          return file;
+        }
+
+        return { ...file, selected: checked };
+      })
+    );
+  };
+
+  const handleFileSelectionChange = useCallback(
+    (fileId: string, isSelected: boolean) => {
+      setFiles((currentFiles) =>
+        currentFiles.map((file) => {
+          if (file.id !== fileId || file.selected === isSelected) {
+            return file;
+          }
+
+          return { ...file, selected: isSelected };
+        })
+      );
+    },
+    [setFiles]
+  );
+
+  const handleRowSelectionToggle = useCallback(
+    (fileId: string) => {
+      setFiles((currentFiles) =>
+        currentFiles.map((file) =>
+          file.id === fileId ? { ...file, selected: !file.selected } : file
+        )
+      );
+    },
+    [setFiles]
+  );
+
+  const handleStatusFilterChange = (statusFilter: StatusFilter) => {
+    setActiveStatusFilter(statusFilter);
+    setRetainedEditedFileIds(new Set());
+  };
+
+  const handleSuggestedNameChange = useCallback(
+    (fileId: string, inputValue: string) => {
+      if (activeStatusFilter !== 'all') {
+        setRetainedEditedFileIds((currentFileIds) => {
+          if (currentFileIds.has(fileId)) {
+            return currentFileIds;
+          }
+
+          const nextFileIds = new Set(currentFileIds);
+          nextFileIds.add(fileId);
+          return nextFileIds;
+        });
+      }
+
+      const suggestedName = stripTxtExtension(inputValue);
+      const validation = validateSuggestedName(suggestedName);
+
+      setFiles((currentFiles) => {
+        const editedFiles = currentFiles.map((file) =>
+          file.id === fileId
+            ? {
+                ...file,
+                suggestedName,
+                normalizedName: validation.normalizedName,
+                error: validation.error,
+                status: validation.error ? 'failed' as const : 'ready' as const,
+              }
+            : file
+        );
+
+        return recomputeFileStatuses(editedFiles);
+      });
+    },
+    [activeStatusFilter, setFiles]
+  );
+
+  const getSortIndicator = (field: SortField) => {
+    if (sortField !== field) return '';
+    return sortOrder === 'asc' ? '▲' : '▼';
+  };
 
   if (files.length === 0) {
     return (
@@ -212,103 +469,45 @@ export default function FileList() {
     );
   }
 
-  const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortField(field);
-      setSortOrder('asc');
-    }
-  };
-
-  const handleSelectAll = (checked: boolean) => {
-    const filteredFileIds = new Set(filteredFiles.map((file) => file.id));
-    setFiles((currentFiles) =>
-      currentFiles.map((file) =>
-        filteredFileIds.has(file.id) ? { ...file, selected: checked } : file
-      )
-    );
-  };
-
-  const handleStatusFilterChange = (statusFilter: StatusFilter) => {
-    setActiveStatusFilter(statusFilter);
-    setRetainedEditedFileIds(new Set());
-  };
-
-  const handleSuggestedNameChange = (fileId: string, inputValue: string) => {
-    if (activeStatusFilter !== 'all') {
-      setRetainedEditedFileIds((currentFileIds) => {
-        if (currentFileIds.has(fileId)) {
-          return currentFileIds;
-        }
-
-        const nextFileIds = new Set(currentFileIds);
-        nextFileIds.add(fileId);
-        return nextFileIds;
-      });
-    }
-
-    const suggestedName = stripTxtExtension(inputValue);
-    const validation = validateSuggestedName(suggestedName);
-
-    setFiles((currentFiles) => {
-      const editedFiles = currentFiles.map((file) =>
-        file.id === fileId
-          ? {
-              ...file,
-              suggestedName,
-              normalizedName: validation.normalizedName,
-              error: validation.error,
-              status: validation.error ? 'failed' as const : 'ready' as const,
-            }
-          : file
-      );
-
-      return recomputeFileStatuses(editedFiles);
-    });
-  };
-
-  const formatSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
-  const getSortIndicator = (field: SortField) => {
-    if (sortField !== field) return '';
-    return sortOrder === 'asc' ? ' ▲' : ' ▼';
-  };
-
   return (
     <div style={styles.container}>
       <div style={styles.filterBar} role="toolbar" aria-label="文件状态筛选">
         <span style={styles.filterLabel}>状态筛选</span>
-        {STATUS_FILTERS.map((filter) => {
-          const isActive = activeStatusFilter === filter.value;
-          return (
-            <button
-              key={filter.value}
-              type="button"
-              aria-pressed={isActive}
-              style={{
-                ...styles.filterButton,
-                ...(isActive ? styles.filterButtonActive : {}),
-              }}
-              onClick={() => handleStatusFilterChange(filter.value)}
-            >
-              {filter.label} ({statusCounts[filter.value]})
-            </button>
-          );
-        })}
+        <div style={styles.filterGroup} role="group" aria-label="按文件状态筛选">
+          {STATUS_FILTERS.map((filter) => {
+            const isActive = activeStatusFilter === filter.value;
+            return (
+              <button
+                key={filter.value}
+                type="button"
+                aria-pressed={isActive}
+                className={`status-filter-button${isActive ? ' is-active' : ''}`}
+                onClick={() => handleStatusFilterChange(filter.value)}
+              >
+                <span>{filter.label}</span>
+                <span className="status-filter-count">
+                  {statusCounts[filter.value]}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      <div style={styles.tableScroller}>
-        <table style={styles.table}>
+      <div ref={tableScrollerRef} style={styles.tableScroller}>
+        <table
+          style={styles.table}
+          aria-rowcount={sortedFiles.length + 1}
+        >
           <thead>
             <tr>
-              <th style={{ ...styles.th, width: '30px' }}>
+              <th
+                className="file-checkbox-cell"
+                style={{ ...styles.th, width: '42px' }}
+              >
                 <input
                   ref={selectAllCheckboxRef}
+                  className="file-checkbox"
                   type="checkbox"
                   aria-label={`选择当前筛选中的 ${filteredFiles.length} 个文件`}
                   checked={areAllFilteredFilesSelected}
@@ -320,82 +519,64 @@ export default function FileList() {
                 style={{ ...styles.th, ...styles.thSortable, width: '35%' }}
                 onClick={() => handleSort('originalStem')}
               >
-                原文件名{getSortIndicator('originalStem')}
+                <span className="file-table-header-content">
+                  <span>原文件名</span>
+                  <span className="file-sort-indicator" aria-hidden="true">
+                    {getSortIndicator('originalStem')}
+                  </span>
+                </span>
               </th>
               <th
-                style={{ ...styles.th, ...styles.thSortable, width: '35%' }}
+                style={{ ...styles.th, ...styles.thSortable, width: '38%' }}
                 onClick={() => handleSort('suggestedName')}
               >
-                建议文件名{getSortIndicator('suggestedName')}
+                <span className="file-table-header-content">
+                  <span>建议文件名</span>
+                  <span className="file-sort-indicator" aria-hidden="true">
+                    {getSortIndicator('suggestedName')}
+                  </span>
+                </span>
               </th>
-              <th style={{ ...styles.th, width: '80px' }}>大小</th>
-              <th style={{ ...styles.th, width: '100px' }}>状态</th>
+              <th
+                className="file-size-cell"
+                style={{ ...styles.th, width: '90px' }}
+              >
+                大小
+              </th>
+              <th style={{ ...styles.th, width: '116px' }}>状态</th>
             </tr>
           </thead>
           <tbody>
-            {sortedFiles.map((file) => (
-              <tr
-                key={file.id}
-                style={styles.row}
-                onMouseEnter={(event) => {
-                  event.currentTarget.style.background = 'hsl(var(--color-background))';
-                }}
-                onMouseLeave={(event) => {
-                  event.currentTarget.style.background = '';
-                }}
-              >
-                <td style={styles.td}>
-                  <input
-                    type="checkbox"
-                    aria-label={`选择 ${file.originalStem}`}
-                    checked={file.selected}
-                    onChange={(event) => {
-                      const isSelected = event.target.checked;
-                      setFiles((currentFiles) =>
-                        currentFiles.map((currentFile) =>
-                          currentFile.id === file.id
-                            ? { ...currentFile, selected: isSelected }
-                            : currentFile
-                        )
-                      );
-                    }}
-                  />
-                </td>
-                <td style={{ ...styles.td, fontSize: '13px' }}>
-                  {file.originalStem}
-                </td>
-                <td style={styles.td}>
-                  {file.status === 'pending' || file.status === 'analyzing' ? (
-                    <span style={{ color: 'hsl(var(--color-text-secondary))' }}>-</span>
-                  ) : (
-                    <input
-                      style={styles.input}
-                      value={file.suggestedName ?? ''}
-                      aria-label={`${file.originalStem} 的建议文件名`}
-                      title={file.error}
-                      onChange={(event) =>
-                        handleSuggestedNameChange(file.id, event.target.value)
-                      }
-                    />
-                  )}
-                </td>
+            {virtualPaddingTop > 0 && (
+              <tr aria-hidden="true">
                 <td
-                  style={{
-                    ...styles.td,
-                    color: 'hsl(var(--color-text-secondary))',
-                    fontSize: '11px',
-                  }}
-                >
-                  {formatSize(file.sizeBytes)}
-                </td>
-                <td style={styles.td} title={file.error}>
-                  <div style={styles.statusCell}>
-                    <span className={`status-dot ${STATUS_CLASSES[file.status]}`} />
-                    <span>{getStatusLabel(file.status)}</span>
-                  </div>
-                </td>
+                  colSpan={5}
+                  style={{ height: `${virtualPaddingTop}px`, padding: 0 }}
+                />
               </tr>
-            ))}
+            )}
+            {virtualRows.map((virtualRow) => {
+              const file = sortedFiles[virtualRow.index];
+
+              return (
+                <FileTableRow
+                  key={file.id}
+                  file={file}
+                  rowIndex={virtualRow.index + 2}
+                  onSelectionChange={handleFileSelectionChange}
+                  onSelectionToggle={handleRowSelectionToggle}
+                  onSuggestedNameChange={handleSuggestedNameChange}
+                />
+              );
+            })}
+            {virtualPaddingBottom > 0 && (
+              <tr aria-hidden="true">
+                <td
+                  colSpan={5}
+                  style={{ height: `${virtualPaddingBottom}px`, padding: 0 }}
+                />
+              </tr>
+            )}
           </tbody>
         </table>
 

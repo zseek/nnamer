@@ -1,4 +1,10 @@
-import type { FileItem, FileStatus, ConflictGroup } from '../types';
+import type {
+  ConflictCleanupPlan,
+  ConflictGroup,
+  FileItem,
+  FileStatus,
+  ResolvableConflictGroup,
+} from '../types';
 
 const MAX_STEM_CHARACTERS = 180;
 const WINDOWS_RESERVED_NAMES = new Set([
@@ -112,10 +118,18 @@ export function recomputeFileStatuses(files: FileItem[]): FileItem[] {
     );
   }
 
-  return files.map((file) => ({
-    ...file,
-    status: deriveFileStatusFromCounts(file, normalizedNameCounts),
-  }));
+  return files.map((file) => {
+    const nextStatus = deriveFileStatusFromCounts(file, normalizedNameCounts);
+
+    if (file.status === nextStatus) {
+      return file;
+    }
+
+    return {
+      ...file,
+      status: nextStatus,
+    };
+  });
 }
 
 function deriveFileStatusFromCounts(
@@ -151,13 +165,17 @@ function deriveFileStatusFromCounts(
   return 'ready';
 }
 
+export function getSelectedExecutableFiles(files: FileItem[]): FileItem[] {
+  return files.filter((file) => file.selected && file.status === 'ready');
+}
+
 export function groupFilesByConflict(files: FileItem[]): ConflictGroup[] {
   const conflictMap = new Map<string, FileItem[]>();
 
   for (const file of files) {
     if (!file.normalizedName) continue;
 
-    const canonical = file.normalizedName.toLowerCase();
+    const canonical = file.normalizedName.toLocaleLowerCase();
     const group = conflictMap.get(canonical) || [];
     group.push(file);
     conflictMap.set(canonical, group);
@@ -165,7 +183,7 @@ export function groupFilesByConflict(files: FileItem[]): ConflictGroup[] {
 
   const conflictGroups: ConflictGroup[] = [];
 
-  for (const [normalizedName, groupFiles] of conflictMap.entries()) {
+  for (const groupFiles of conflictMap.values()) {
     if (groupFiles.length > 1) {
       const sortedBySize = [...groupFiles].sort(
         (a, b) => b.sizeBytes - a.sizeBytes
@@ -176,7 +194,7 @@ export function groupFilesByConflict(files: FileItem[]): ConflictGroup[] {
       );
 
       conflictGroups.push({
-        normalizedName,
+        normalizedName: groupFiles[0].normalizedName!,
         files: groupFiles,
         largestFileId: largestFiles.length === 1 ? largestFiles[0].id : undefined,
       });
@@ -184,6 +202,47 @@ export function groupFilesByConflict(files: FileItem[]): ConflictGroup[] {
   }
 
   return conflictGroups;
+}
+
+export function createConflictCleanupPlan(files: FileItem[]): ConflictCleanupPlan {
+  const conflictGroups = groupFilesByConflict(
+    files.filter(
+      (file) => file.status === 'conflict' && !file.error && file.normalizedName
+    )
+  );
+  const resolvableGroups: ResolvableConflictGroup[] = [];
+  const skippedGroups: ConflictGroup[] = [];
+
+  for (const conflictGroup of conflictGroups) {
+    if (!conflictGroup.largestFileId) {
+      skippedGroups.push(conflictGroup);
+      continue;
+    }
+
+    const retainedFile = conflictGroup.files.find(
+      (file) => file.id === conflictGroup.largestFileId
+    );
+    if (!retainedFile) {
+      skippedGroups.push(conflictGroup);
+      continue;
+    }
+
+    resolvableGroups.push({
+      normalizedName: conflictGroup.normalizedName,
+      retainedFile,
+      filesToRemove: conflictGroup.files.filter(
+        (file) => file.id !== retainedFile.id
+      ),
+    });
+  }
+
+  return {
+    resolvableGroups,
+    skippedGroups,
+    filesToRemove: resolvableGroups.flatMap(
+      (conflictGroup) => conflictGroup.filesToRemove
+    ),
+  };
 }
 
 export function formatFileSize(bytes: number): string {

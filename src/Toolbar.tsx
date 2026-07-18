@@ -1,10 +1,37 @@
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useAppStore } from './store';
-import { scanDirectory, analyzeBatch, executeRenameOperations } from './shared/lib/api';
-import { recomputeFileStatuses } from './shared/lib/fileUtils';
+import {
+  analyzeBatch,
+  executeRenameOperations,
+  moveFilesToRecycleBin,
+  scanDirectory,
+} from './shared/lib/api';
+import {
+  createConflictCleanupPlan,
+  formatFileSize,
+  getSelectedExecutableFiles,
+  recomputeFileStatuses,
+} from './shared/lib/fileUtils';
 import type { FileItem } from './shared/types';
 import SettingsDialog from './SettingsDialog';
+
+type AppNotificationTone = 'success' | 'warning' | 'error';
+
+interface AppNotification {
+  tone: AppNotificationTone;
+  title: string;
+  message: string;
+  detail?: string;
+}
+
+function formatExecutionError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
 
 export default function Toolbar() {
   const {
@@ -17,11 +44,34 @@ export default function Toolbar() {
     setAnalysisProgress,
     analysisProgress,
     setShowLogger,
+    clearFiles,
   } = useAppStore();
   const [isScanning, setIsScanning] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [isRenameConfirmationOpen, setIsRenameConfirmationOpen] = useState(false);
+  const [isConflictCleanupConfirmationOpen, setIsConflictCleanupConfirmationOpen] =
+    useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [isCleaningConflicts, setIsCleaningConflicts] = useState(false);
+  const [appNotification, setAppNotification] = useState<AppNotification | null>(null);
+  const appNotificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const confirmationDialogRef = useRef<HTMLElement | null>(null);
+  const renameTriggerButtonRef = useRef<HTMLButtonElement | null>(null);
+  const conflictCleanupTriggerButtonRef = useRef<HTMLButtonElement | null>(null);
   const isAnalysisPausedRef = useRef(false);
   const resumeWaitersRef = useRef<Array<() => void>>([]);
+
+  const conflictCleanupPlan = useMemo(
+    () => createConflictCleanupPlan(files),
+    [files]
+  );
+  const isConfirmationOpen =
+    isRenameConfirmationOpen || isConflictCleanupConfirmationOpen;
+
+  const closeActiveConfirmation = () => {
+    setIsRenameConfirmationOpen(false);
+    setIsConflictCleanupConfirmationOpen(false);
+  };
 
   const releasePausedWorkers = () => {
     const waitingResolvers = resumeWaitersRef.current.splice(0);
@@ -36,6 +86,103 @@ export default function Toolbar() {
     await new Promise<void>((resolve) => {
       resumeWaitersRef.current.push(resolve);
     });
+  };
+
+  const dismissAppNotification = () => {
+    if (appNotificationTimerRef.current) {
+      clearTimeout(appNotificationTimerRef.current);
+      appNotificationTimerRef.current = null;
+    }
+
+    setAppNotification(null);
+  };
+
+  const displayAppNotification = (
+    notification: AppNotification,
+    durationMilliseconds: number
+  ) => {
+    if (appNotificationTimerRef.current) {
+      clearTimeout(appNotificationTimerRef.current);
+    }
+
+    setAppNotification(notification);
+    appNotificationTimerRef.current = setTimeout(() => {
+      appNotificationTimerRef.current = null;
+      setAppNotification(null);
+    }, durationMilliseconds);
+  };
+
+  useEffect(() => () => {
+    if (appNotificationTimerRef.current) {
+      clearTimeout(appNotificationTimerRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isConfirmationOpen) {
+      return undefined;
+    }
+
+    const dialogElement = confirmationDialogRef.current;
+    const focusableElements = dialogElement
+      ? Array.from(
+          dialogElement.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+        )
+      : [];
+    const firstFocusableElement = focusableElements[0];
+    const lastFocusableElement = focusableElements[focusableElements.length - 1];
+
+    firstFocusableElement?.focus();
+
+    const handleConfirmationKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeActiveConfirmation();
+        return;
+      }
+
+      if (event.key !== 'Tab' || focusableElements.length === 0) {
+        return;
+      }
+
+      if (event.shiftKey && document.activeElement === firstFocusableElement) {
+        event.preventDefault();
+        lastFocusableElement?.focus();
+      } else if (!event.shiftKey && document.activeElement === lastFocusableElement) {
+        event.preventDefault();
+        firstFocusableElement?.focus();
+      }
+    };
+
+    window.addEventListener('keydown', handleConfirmationKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleConfirmationKeyDown);
+      if (isConflictCleanupConfirmationOpen) {
+        conflictCleanupTriggerButtonRef.current?.focus();
+      } else {
+        renameTriggerButtonRef.current?.focus();
+      }
+    };
+  }, [isConfirmationOpen, isConflictCleanupConfirmationOpen]);
+
+  const handleClearWorkspace = () => {
+    const isTaskRunning =
+      isScanning
+      || analysisProgress.isRunning
+      || isRenaming
+      || isCleaningConflicts;
+
+    if (!currentDirectory || isTaskRunning) {
+      return;
+    }
+
+    dismissAppNotification();
+    closeActiveConfirmation();
+    isAnalysisPausedRef.current = false;
+    releasePausedWorkers();
+    clearFiles();
   };
 
   const handleToggleAnalysisPause = () => {
@@ -105,6 +252,13 @@ export default function Toolbar() {
       alert('所选文件没有待分析或可重试的项目');
       return;
     }
+
+    const selectedFileIds = new Set(selectedFiles.map((file) => file.id));
+    setFiles((currentFiles) =>
+      currentFiles.map((file) =>
+        selectedFileIds.has(file.id) ? { ...file, selected: false } : file
+      )
+    );
 
     const batches: FileItem[][] = [];
     for (
@@ -243,25 +397,171 @@ export default function Toolbar() {
     }
   };
 
-  const handleExecute = async () => {
-    const executableFiles = files.filter((file) => file.status === 'ready');
-    
-    if (executableFiles.length === 0) {
-      alert('没有可执行的文件');
+  const handleRequestConflictCleanup = () => {
+    if (conflictCleanupPlan.filesToRemove.length === 0) {
+      displayAppNotification(
+        {
+          tone: 'warning',
+          title: '没有可自动清理的冲突',
+          message: conflictCleanupPlan.skippedGroups.length > 0
+            ? `${conflictCleanupPlan.skippedGroups.length} 组冲突的最大文件大小相同，请手动确认要保留的文件。`
+            : '当前没有建议文件名相同的冲突项。',
+        },
+        6000
+      );
       return;
     }
 
-    if (!confirm(`确定要重命名 ${executableFiles.length} 个文件吗？`)) {
+    setIsConflictCleanupConfirmationOpen(true);
+  };
+
+  const handleExecuteConflictCleanup = async () => {
+    const latestCleanupPlan = createConflictCleanupPlan(files);
+    const filesToRemove = latestCleanupPlan.filesToRemove;
+
+    if (!currentDirectory || filesToRemove.length === 0) {
+      setIsConflictCleanupConfirmationOpen(false);
+      displayAppNotification(
+        {
+          tone: 'error',
+          title: '无法清理冲突',
+          message: '当前目录或冲突列表已经发生变化，请重新检查后再试。',
+        },
+        6000
+      );
       return;
     }
 
-    const operations = executableFiles.map((file) => ({
+    setIsConflictCleanupConfirmationOpen(false);
+    dismissAppNotification();
+    setIsCleaningConflicts(true);
+
+    try {
+      const results = await moveFilesToRecycleBin(
+        currentDirectory,
+        filesToRemove.map((file) => ({
+          fileId: file.id,
+          originalName: file.originalName,
+          sizeBytes: file.sizeBytes,
+          modifiedAt: file.modifiedAt,
+        }))
+      );
+      const candidateFileIds = new Set(filesToRemove.map((file) => file.id));
+      const successfulFileIds = new Set(
+        results
+          .filter(
+            (result) => result.success && candidateFileIds.has(result.fileId)
+          )
+          .map((result) => result.fileId)
+      );
+      const failedResults = results.filter((result) => !result.success);
+      const failureCount = filesToRemove.length - successfulFileIds.size;
+
+      if (successfulFileIds.size > 0) {
+        setFiles((currentFiles) =>
+          recomputeFileStatuses(
+            currentFiles.filter((file) => !successfulFileIds.has(file.id))
+          )
+        );
+      }
+
+      const skippedGroupCount = latestCleanupPlan.skippedGroups.length;
+      if (failureCount === 0) {
+        displayAppNotification(
+          {
+            tone: skippedGroupCount > 0 ? 'warning' : 'success',
+            title: skippedGroupCount > 0 ? '可判定的冲突已清理' : '冲突清理完成',
+            message: `已保留 ${latestCleanupPlan.resolvableGroups.length} 个较大文件，并将 ${successfulFileIds.size} 个较小文件移入回收站。${
+              skippedGroupCount > 0
+                ? `另有 ${skippedGroupCount} 组因最大文件大小相同而保留。`
+                : ''
+            }`,
+          },
+          skippedGroupCount > 0 ? 7000 : 5000
+        );
+        return;
+      }
+
+      const failedFileById = new Map(
+        filesToRemove.map((file) => [file.id, file.originalName])
+      );
+      const firstFailure = failedResults[0];
+      const firstFailureDetail = firstFailure
+        ? `${failedFileById.get(firstFailure.fileId) ?? firstFailure.fileId}：${
+            firstFailure.error ?? '未知错误'
+          }`
+        : '部分文件未返回操作结果';
+
+      displayAppNotification(
+        {
+          tone: successfulFileIds.size > 0 ? 'warning' : 'error',
+          title: successfulFileIds.size > 0 ? '部分冲突未能清理' : '冲突清理未完成',
+          message: `已移入回收站 ${successfulFileIds.size} 个，失败 ${failureCount} 个。失败项目仍保留在列表中。`,
+          detail: firstFailureDetail,
+        },
+        9000
+      );
+    } catch (error) {
+      console.error('清理冲突失败:', error);
+      displayAppNotification(
+        {
+          tone: 'error',
+          title: '冲突清理失败',
+          message: '文件未从列表中移除，你可以检查问题后重新执行。',
+          detail: formatExecutionError(error),
+        },
+        9000
+      );
+    } finally {
+      setIsCleaningConflicts(false);
+    }
+  };
+
+  const handleRequestRenameExecution = () => {
+    const selectedExecutableFileCount = getSelectedExecutableFiles(files).length;
+
+    if (selectedExecutableFileCount === 0) {
+      displayAppNotification(
+        {
+          tone: 'warning',
+          title: '没有已选的可执行文件',
+          message: '请先选中状态为“可执行”的文件，再执行重命名。',
+        },
+        5000
+      );
+      return;
+    }
+
+    setIsRenameConfirmationOpen(true);
+  };
+
+  const handleExecuteRename = async () => {
+    const selectedExecutableFiles = getSelectedExecutableFiles(files);
+
+    if (!currentDirectory || selectedExecutableFiles.length === 0) {
+      setIsRenameConfirmationOpen(false);
+      displayAppNotification(
+        {
+          tone: 'error',
+          title: '无法执行重命名',
+          message: '当前目录或已选可执行文件列表已经发生变化，请重新检查后再试。',
+        },
+        6000
+      );
+      return;
+    }
+
+    setIsRenameConfirmationOpen(false);
+    dismissAppNotification();
+    setIsRenaming(true);
+
+    const operations = selectedExecutableFiles.map((file) => ({
       sourcePath: `${currentDirectory}\\${file.originalName}`,
       targetName: file.normalizedName!,
     }));
 
     const metadataSnapshot = Object.fromEntries(
-      executableFiles.map((file) => [
+      selectedExecutableFiles.map((file) => [
         file.originalName,
         {
           sizeBytes: file.sizeBytes,
@@ -271,30 +571,115 @@ export default function Toolbar() {
     );
 
     try {
-      const results = await executeRenameOperations(currentDirectory!, operations, metadataSnapshot);
+      const results = await executeRenameOperations(
+        currentDirectory,
+        operations,
+        metadataSnapshot
+      );
+      const filesByOriginalName = new Map(
+        selectedExecutableFiles.map((file) => [file.originalName, file])
+      );
+      const successfulFileIds = Array.from(
+        new Set(
+          results.flatMap((result) => {
+            const matchedFile = filesByOriginalName.get(result.fileId);
+            return result.success && matchedFile ? [matchedFile.id] : [];
+          })
+        )
+      );
+      const failedResults = results.filter((result) => !result.success);
+      const missingResultCount = Math.max(
+        0,
+        selectedExecutableFiles.length - results.length
+      );
+      const failureCount = Math.max(
+        0,
+        selectedExecutableFiles.length - successfulFileIds.length
+      );
 
-      const successIds: string[] = [];
-      results.forEach((result) => {
-        const file = executableFiles.find((f) => f.originalName === result.fileId);
-        if (file && result.success) {
-          successIds.push(file.id);
-        }
-      });
-
-      if (successIds.length > 0) {
-        removeFiles(successIds);
+      if (successfulFileIds.length > 0) {
+        removeFiles(successfulFileIds);
       }
 
-      alert(`成功重命名 ${successIds.length} 个文件`);
+      if (failureCount === 0) {
+        displayAppNotification(
+          {
+            tone: 'success',
+            title: '重命名完成',
+            message: `已成功重命名 ${successfulFileIds.length} 个文件。`,
+          },
+          4500
+        );
+        return;
+      }
+
+      const firstFailure = failedResults[0];
+      const failureDetail = firstFailure?.error
+        ? `${firstFailure.fileId}：${firstFailure.error}`
+        : missingResultCount > 0
+          ? `${missingResultCount} 个文件未返回执行结果`
+          : undefined;
+
+      displayAppNotification(
+        {
+          tone: successfulFileIds.length > 0 ? 'warning' : 'error',
+          title: successfulFileIds.length > 0 ? '部分文件未能重命名' : '重命名未完成',
+          message: `成功 ${successfulFileIds.length} 个，失败 ${failureCount} 个。未成功的文件已保留在列表中。`,
+          detail: failureDetail,
+        },
+        8000
+      );
     } catch (error) {
-      alert(`执行失败：${error}`);
+      console.error('执行重命名失败:', error);
+      displayAppNotification(
+        {
+          tone: 'error',
+          title: '执行重命名失败',
+          message: '文件未从列表中移除，你可以检查问题后重新执行。',
+          detail: formatExecutionError(error),
+        },
+        8000
+      );
+    } finally {
+      setIsRenaming(false);
     }
+  };
+
+  const handleSettingsSaveSuccess = () => {
+    setShowSettings(false);
+    displayAppNotification(
+      {
+        tone: 'success',
+        title: '设置已保存',
+        message: '新的设置将在后续分析请求中生效。',
+      },
+      4500
+    );
+  };
+
+  const handleSettingsSaveError = (errorMessage: string) => {
+    displayAppNotification(
+      {
+        tone: 'error',
+        title: '设置保存失败',
+        message: '你的修改仍保留在设置窗口中，可以修正后重新保存。',
+        detail: errorMessage,
+      },
+      8000
+    );
   };
 
   const selectedAnalyzableCount = files.filter(
     (file) => file.selected && (file.status === 'pending' || file.status === 'failed')
   ).length;
-  const executableCount = files.filter((file) => file.status === 'ready').length;
+  const selectedExecutableCount = getSelectedExecutableFiles(files).length;
+  const conflictFileCount = files.filter((file) => file.status === 'conflict').length;
+  const conflictCleanupPreviewGroups = conflictCleanupPlan.resolvableGroups.slice(0, 5);
+  const hiddenConflictCleanupGroupCount = Math.max(
+    0,
+    conflictCleanupPlan.resolvableGroups.length - conflictCleanupPreviewGroups.length
+  );
+  const isFileOperationRunning = isRenaming || isCleaningConflicts;
   const processedBatchCount =
     analysisProgress.completedBatches + analysisProgress.failedBatches;
 
@@ -304,15 +689,33 @@ export default function Toolbar() {
         <button
           className="btn"
           onClick={handleSelectDirectory}
-          disabled={isScanning || analysisProgress.isRunning}
+          disabled={isScanning || analysisProgress.isRunning || isFileOperationRunning}
         >
           {isScanning ? '扫描中...' : '选择目录'}
         </button>
         
         {currentDirectory && (
-          <span style={{ fontSize: '12px', color: 'hsl(var(--color-text-secondary))' }}>
-            {currentDirectory}
-          </span>
+          <>
+            <span
+              className="toolbar-directory-path"
+              title={currentDirectory}
+            >
+              {currentDirectory}
+            </span>
+            <button
+              type="button"
+              className="btn toolbar-clear-button"
+              onClick={handleClearWorkspace}
+              disabled={
+                isScanning
+                || analysisProgress.isRunning
+                || isFileOperationRunning
+              }
+              title="关闭当前目录并清空任务列表，不会修改磁盘文件"
+            >
+              清空任务
+            </button>
+          </>
         )}
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
@@ -333,7 +736,12 @@ export default function Toolbar() {
           <button
             className="btn"
             onClick={handleAnalyzeAll}
-            disabled={!settings || selectedAnalyzableCount === 0 || analysisProgress.isRunning}
+            disabled={
+              !settings
+              || selectedAnalyzableCount === 0
+              || analysisProgress.isRunning
+              || isFileOperationRunning
+            }
           >
             {analysisProgress.isRunning
               ? `${analysisProgress.isPaused ? '已暂停' : '分析中'} ${processedBatchCount}/${analysisProgress.totalBatches}`
@@ -349,17 +757,233 @@ export default function Toolbar() {
             </button>
           )}
 
+          {conflictFileCount > 0 && (
+            <button
+              ref={conflictCleanupTriggerButtonRef}
+              className="btn btn-warning"
+              onClick={handleRequestConflictCleanup}
+              disabled={analysisProgress.isRunning || isFileOperationRunning}
+              title={
+                conflictCleanupPlan.filesToRemove.length > 0
+                  ? '保留每组唯一最大的文件，将其余较小文件移入回收站'
+                  : '存在最大文件大小相同的冲突组，需要手动处理'
+              }
+            >
+              {isCleaningConflicts
+                ? '正在清理冲突...'
+                : `清理冲突 (${conflictCleanupPlan.filesToRemove.length})`}
+            </button>
+          )}
+
           <button
+            ref={renameTriggerButtonRef}
             className="btn btn-primary"
-            onClick={handleExecute}
-            disabled={executableCount === 0 || analysisProgress.isRunning}
+            onClick={handleRequestRenameExecution}
+            disabled={
+              selectedExecutableCount === 0
+              || analysisProgress.isRunning
+              || isFileOperationRunning
+            }
           >
-            执行重命名 ({executableCount})
+            {isRenaming
+              ? '正在重命名...'
+              : `执行重命名 (${selectedExecutableCount})`}
           </button>
         </div>
       </div>
 
-      <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} />
+      <SettingsDialog
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+        onSaveSuccess={handleSettingsSaveSuccess}
+        onSaveError={handleSettingsSaveError}
+      />
+
+      {isRenameConfirmationOpen && (
+        <div
+          className="operation-confirmation-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setIsRenameConfirmationOpen(false);
+            }
+          }}
+        >
+          <section
+            ref={confirmationDialogRef}
+            className="operation-confirmation-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="operation-confirmation-title"
+            aria-describedby="operation-confirmation-description"
+          >
+            <div className="operation-confirmation-header">
+              <div>
+                <h2 id="operation-confirmation-title">确认执行重命名</h2>
+                <p id="operation-confirmation-description">
+                  将仅处理当前已选中且状态为“可执行”的文件。
+                </p>
+              </div>
+            </div>
+
+            <div className="operation-confirmation-summary">
+              <span>待重命名文件</span>
+              <strong>{selectedExecutableCount}</strong>
+              <span>个</span>
+            </div>
+
+            <div className="operation-confirmation-notice">
+              执行前会再次校验文件状态。成功项目将从列表移除，未成功项目会保留以便检查。
+            </div>
+
+            <div className="operation-confirmation-actions">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setIsRenameConfirmationOpen(false)}
+              >
+                返回检查
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleExecuteRename}
+              >
+                重命名 {selectedExecutableCount} 个文件
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {isConflictCleanupConfirmationOpen && (
+        <div
+          className="operation-confirmation-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setIsConflictCleanupConfirmationOpen(false);
+            }
+          }}
+        >
+          <section
+            ref={confirmationDialogRef}
+            className="operation-confirmation-dialog conflict-cleanup-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="conflict-cleanup-title"
+            aria-describedby="conflict-cleanup-description"
+          >
+            <div className="operation-confirmation-header">
+              <div>
+                <h2 id="conflict-cleanup-title">保留较大文件并清理冲突</h2>
+                <p id="conflict-cleanup-description">
+                  每组保留唯一最大的文件，其余较小文件将移入系统回收站。
+                </p>
+              </div>
+            </div>
+
+            <div className="conflict-cleanup-summary-grid">
+              <div className="conflict-cleanup-summary-item">
+                <span>可处理冲突组</span>
+                <strong>{conflictCleanupPlan.resolvableGroups.length}</strong>
+              </div>
+              <div className="conflict-cleanup-summary-item is-removal">
+                <span>移入回收站</span>
+                <strong>{conflictCleanupPlan.filesToRemove.length}</strong>
+              </div>
+            </div>
+
+            <div className="conflict-cleanup-preview" aria-label="冲突清理预览">
+              {conflictCleanupPreviewGroups.map((conflictGroup) => (
+                <div
+                  key={conflictGroup.normalizedName.toLocaleLowerCase()}
+                  className="conflict-cleanup-group"
+                >
+                  <div
+                    className="conflict-cleanup-name"
+                    title={conflictGroup.normalizedName}
+                  >
+                    {conflictGroup.normalizedName}
+                  </div>
+                  <div className="conflict-cleanup-retained">
+                    <span className="conflict-cleanup-retained-label">保留</span>
+                    <span
+                      className="conflict-cleanup-retained-file"
+                      title={conflictGroup.retainedFile.originalName}
+                    >
+                      {conflictGroup.retainedFile.originalName}
+                    </span>
+                    <strong>{formatFileSize(conflictGroup.retainedFile.sizeBytes)}</strong>
+                  </div>
+                  <div className="conflict-cleanup-removal-count">
+                    移除其余 {conflictGroup.filesToRemove.length} 个较小文件
+                  </div>
+                </div>
+              ))}
+              {hiddenConflictCleanupGroupCount > 0 && (
+                <div className="conflict-cleanup-more">
+                  另有 {hiddenConflictCleanupGroupCount} 组将按相同规则处理
+                </div>
+              )}
+            </div>
+
+            {conflictCleanupPlan.skippedGroups.length > 0 && (
+              <div className="conflict-cleanup-skipped">
+                {conflictCleanupPlan.skippedGroups.length} 组的最大文件大小相同，将跳过并保留全部文件。
+              </div>
+            )}
+
+            <div className="operation-confirmation-notice conflict-cleanup-notice">
+              执行前会再次校验文件大小和修改时间。元数据变化或移动失败的文件不会从列表移除。
+            </div>
+
+            <div className="operation-confirmation-actions">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setIsConflictCleanupConfirmationOpen(false)}
+              >
+                返回检查
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={handleExecuteConflictCleanup}
+              >
+                移入回收站 {conflictCleanupPlan.filesToRemove.length} 个文件
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {appNotification && (
+        <aside
+          className={`app-notification app-notification-${appNotification.tone}`}
+          role={appNotification.tone === 'success' ? 'status' : 'alert'}
+          aria-live={appNotification.tone === 'success' ? 'polite' : 'assertive'}
+        >
+          <span className="app-notification-symbol" aria-hidden="true">
+            {appNotification.tone === 'success' ? '✓' : '!'}
+          </span>
+          <div className="app-notification-content">
+            <div className="app-notification-title">{appNotification.title}</div>
+            <div className="app-notification-message">{appNotification.message}</div>
+            {appNotification.detail && (
+              <div className="app-notification-detail" title={appNotification.detail}>
+                {appNotification.detail}
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            className="app-notification-close"
+            onClick={dismissAppNotification}
+            aria-label="关闭通知"
+          >
+            ×
+          </button>
+        </aside>
+      )}
     </>
   );
 }

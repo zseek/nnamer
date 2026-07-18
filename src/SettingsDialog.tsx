@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useAppStore } from './store';
 import { saveSettings } from './shared/lib/api';
 import type { AppSettings } from './shared/types';
@@ -7,94 +7,90 @@ const styles: { [key: string]: React.CSSProperties } = {
   overlay: {
     position: 'fixed',
     inset: 0,
-    background: 'rgba(0, 0, 0, 0.5)',
+    background: 'rgba(15, 23, 42, 0.48)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 1000,
   },
   dialog: {
+    width: '760px',
+    maxWidth: 'calc(100vw - 32px)',
+    maxHeight: '88vh',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
     background: 'hsl(var(--color-surface))',
-    borderRadius: '6px',
-    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
-    width: '680px',
-    maxHeight: '85vh',
-    overflow: 'auto',
+    border: '1px solid hsl(var(--color-border))',
+    borderRadius: '7px',
+    boxShadow: '0 16px 40px rgba(15, 23, 42, 0.2)',
   },
   header: {
-    padding: '12px 16px',
+    flexShrink: 0,
+    padding: '13px 18px',
     borderBottom: '1px solid hsl(var(--color-border))',
     fontSize: '14px',
     fontWeight: 600,
   },
   content: {
-    padding: '16px',
-  },
-  row: {
-    display: 'grid',
-    gridTemplateColumns: '140px 1fr',
-    alignItems: 'center',
-    marginBottom: '12px',
-    gap: '12px',
-  },
-  label: {
-    fontSize: '12px',
-    fontWeight: 500,
-    color: 'hsl(var(--color-text))',
-    textAlign: 'right',
+    minHeight: 0,
+    padding: '16px 18px',
+    overflowY: 'auto',
   },
   input: {
     width: '100%',
-    padding: '5px 8px',
+    height: '32px',
+    padding: '5px 9px',
     border: '1px solid hsl(var(--color-border))',
-    borderRadius: '3px',
+    borderRadius: '4px',
+    background: 'hsl(var(--color-surface))',
+    color: 'hsl(var(--color-text))',
     fontSize: '12px',
   },
   textarea: {
     width: '100%',
-    padding: '6px 8px',
-    border: '1px solid hsl(var(--color-border))',
-    borderRadius: '3px',
-    fontSize: '11px',
-    fontFamily: 'monospace',
-    resize: 'vertical',
     minHeight: '120px',
     maxHeight: '300px',
+    padding: '7px 9px',
+    resize: 'vertical',
+    border: '1px solid hsl(var(--color-border))',
+    borderRadius: '4px',
+    fontFamily: 'monospace',
+    fontSize: '11px',
     lineHeight: '1.4',
-  },
-  section: {
-    marginTop: '12px',
-    paddingTop: '12px',
-    borderTop: '1px solid hsl(var(--color-border))',
   },
   sectionTitle: {
+    marginBottom: '6px',
+    color: 'hsl(var(--color-text))',
     fontSize: '12px',
     fontWeight: 600,
-    color: 'hsl(var(--color-text))',
-    marginBottom: '6px',
   },
   formatExample: {
-    fontSize: '11px',
-    fontFamily: 'monospace',
-    background: 'hsl(var(--color-background))',
-    padding: '6px 8px',
-    borderRadius: '3px',
     marginTop: '6px',
-    whiteSpace: 'pre-wrap',
+    padding: '7px 9px',
+    borderRadius: '4px',
+    background: 'hsl(var(--color-background))',
+    fontFamily: 'monospace',
+    fontSize: '11px',
     lineHeight: '1.4',
+    whiteSpace: 'pre-wrap',
   },
   footer: {
-    padding: '10px 16px',
-    borderTop: '1px solid hsl(var(--color-border))',
+    flexShrink: 0,
+    padding: '10px 18px',
     display: 'flex',
     justifyContent: 'flex-end',
     gap: '8px',
+    borderTop: '1px solid hsl(var(--color-border))',
+    background: 'hsl(var(--color-surface))',
   },
 };
 
 interface SettingsDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  onSaveSuccess: () => void;
+  onSaveError: (errorMessage: string) => void;
 }
 
 const DEFAULT_PROMPT = `你是一个专业的文件名识别工具。你的任务是从混乱的文件名中提取出正确的小说书名。
@@ -109,16 +105,24 @@ const DEFAULT_PROMPT = `你是一个专业的文件名识别工具。你的任�
 - "id": 文件的唯一标识符（与输入完全一致）
 - "suggested_name": 识别出的书名（纯文本，不含扩展名）
 
-**示例：**
-输入文件名："[顶点小说]诡秘之主(全本)作者爱潜水的乌贼"
-输出：{"id": "file-001", "suggested_name": "诡秘之主"}
+**输入输出示例：**
+输入格式：
+[
+  {"id": "b8c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e", "filename": "[笔趣阁]诡秘之主(全本)作者爱潜水的乌贼"},
+  {"id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "filename": "斗破苍穹-天蚕土豆【完结】"}
+]
+输出格式：
+[
+  {"id": "b8c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e", "suggested_name": "诡秘之主"},
+  {"id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "suggested_name": "斗破苍穹"}
+]`;
 
-**重要：**
-1. 必须包含所有输入文件，一个都不能遗漏
-2. 只返回 JSON 数组，不要任何其他文字说明
-3. 确保 JSON 格式正确可解析`;
-
-export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
+export default function SettingsDialog({
+  isOpen,
+  onClose,
+  onSaveSuccess,
+  onSaveError,
+}: SettingsDialogProps) {
   const { settings, setSettings } = useAppStore();
   const [formData, setFormData] = useState<AppSettings>(
     settings || {
@@ -133,77 +137,136 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
     }
   );
 
+  const [isSaving, setIsSaving] = useState(false);
+
   useEffect(() => {
     if (isOpen && settings) {
       setFormData(settings);
+      setIsSaving(false);
     }
   }, [isOpen, settings]);
 
-  if (!isOpen) return null;
+  const handleClose = () => {
+    if (isSaving) {
+      return;
+    }
+
+    onClose();
+  };
 
   const handleSave = async () => {
+    setIsSaving(true);
+
     try {
-      await saveSettings(formData);
-      setSettings(formData);
-      onClose();
+      const savedSettings = await saveSettings(formData);
+      setSettings(savedSettings);
+      setFormData(savedSettings);
+      onSaveSuccess();
     } catch (error) {
-      alert(`保存失败：${error}`);
+      onSaveError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const handleOverlayClick = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) {
-      onClose();
+  const handleOverlayClick = (event: React.MouseEvent) => {
+    if (event.target === event.currentTarget) {
+      handleClose();
     }
   };
+
+  if (!isOpen) return null;
 
   return (
     <div style={styles.overlay} onClick={handleOverlayClick}>
-      <div style={styles.dialog}>
-        <div style={styles.header}>设置</div>
+      <div
+        style={styles.dialog}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-dialog-title"
+      >
+        <div id="settings-dialog-title" style={styles.header}>设置</div>
         
         <div style={styles.content}>
-          <div style={styles.row}>
-            <label style={styles.label}>API 端点 (OpenAI 兼容)</label>
-            <input
-              type="text"
-              style={styles.input}
-              value={formData.baseUrl}
-              onChange={(e) => setFormData({ ...formData, baseUrl: e.target.value })}
-              placeholder="https://api.openai.com/v1"
-            />
-          </div>
+          <section className="settings-section" aria-labelledby="settings-service-title">
+            <div className="settings-section-heading">
+              <div id="settings-service-title" className="settings-section-title">
+                模型服务
+              </div>
+              <div className="settings-section-description">
+                OpenAI 兼容的接口地址、凭据和模型
+              </div>
+            </div>
 
-          <div style={styles.row}>
-            <label style={styles.label}>API Key (身份验证)</label>
-            <input
-              type="password"
-              style={styles.input}
-              value={formData.apiKey}
-              onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
-              placeholder="sk-..."
-            />
-          </div>
+            <div className="settings-service-grid">
+              <label className="settings-field settings-field-wide">
+                <span className="settings-field-label">API 端点</span>
+                <input
+                  type="text"
+                  className="settings-input"
+                  style={styles.input}
+                  value={formData.baseUrl}
+                  onChange={(event) => setFormData({
+                    ...formData,
+                    baseUrl: event.target.value,
+                  })}
+                  placeholder="https://api.openai.com/v1"
+                  autoComplete="url"
+                />
+                <span className="settings-field-hint">OpenAI 兼容接口的基础地址</span>
+              </label>
 
-          <div style={styles.row}>
-            <label style={styles.label}>模型名称</label>
-            <input
-              type="text"
-              style={styles.input}
-              value={formData.model}
-              onChange={(e) => setFormData({ ...formData, model: e.target.value })}
-              placeholder="gpt-4o-mini / claude-3-5-sonnet"
-            />
-          </div>
+              <label className="settings-field">
+                <span className="settings-field-label">API Key</span>
+                <input
+                  type="password"
+                  className="settings-input"
+                  style={styles.input}
+                  value={formData.apiKey}
+                  onChange={(event) => setFormData({
+                    ...formData,
+                    apiKey: event.target.value,
+                  })}
+                  placeholder="sk-..."
+                  autoComplete="off"
+                />
+              </label>
 
-          <div style={styles.row}>
-            <label style={styles.label}>分析参数</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
-                批次大小 (10-20)
+              <label className="settings-field">
+                <span className="settings-field-label">模型名称</span>
+                <input
+                  type="text"
+                  className="settings-input"
+                  style={styles.input}
+                  value={formData.model}
+                  onChange={(event) => setFormData({
+                    ...formData,
+                    model: event.target.value,
+                  })}
+                  placeholder="gpt-4o-mini"
+                  autoComplete="off"
+                />
+              </label>
+            </div>
+          </section>
+
+          <section className="settings-section" aria-labelledby="settings-analysis-title">
+            <div className="settings-section-heading">
+              <div id="settings-analysis-title" className="settings-section-title">
+                分析参数
+              </div>
+              <div className="settings-section-description">
+                控制单批规模、失败重试和同时请求数量
+              </div>
+            </div>
+
+            <div className="settings-parameter-grid">
+              <label className="settings-parameter-field">
+                <span className="settings-field-label">批次大小</span>
                 <input
                   type="number"
-                  style={{ ...styles.input, width: '64px' }}
+                  className="settings-input settings-number-input"
+                  style={styles.input}
                   value={formData.batchSize}
                   onChange={(event) => setFormData({
                     ...formData,
@@ -212,12 +275,15 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
                   min="10"
                   max="20"
                 />
+                <span className="settings-field-hint">每批 10 至 20 个文件</span>
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
-                重试次数 (0-5)
+
+              <label className="settings-parameter-field">
+                <span className="settings-field-label">重试次数</span>
                 <input
                   type="number"
-                  style={{ ...styles.input, width: '56px' }}
+                  className="settings-input settings-number-input"
+                  style={styles.input}
                   value={formData.maxRetries}
                   onChange={(event) => setFormData({
                     ...formData,
@@ -225,14 +291,16 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
                   })}
                   min="0"
                   max="5"
-                  title="每个批次首次请求失败后的最大重试次数"
                 />
+                <span className="settings-field-hint">失败后额外重试 0 至 5 次</span>
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
-                并发数 (1-10)
+
+              <label className="settings-parameter-field">
+                <span className="settings-field-label">并发数</span>
                 <input
                   type="number"
-                  style={{ ...styles.input, width: '56px' }}
+                  className="settings-input settings-number-input"
+                  style={styles.input}
                   value={formData.concurrency}
                   onChange={(event) => setFormData({
                     ...formData,
@@ -240,13 +308,30 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
                   })}
                   min="1"
                   max="10"
-                  title="同时发送的批次请求数量"
                 />
+                <span className="settings-field-hint">同时执行 1 至 10 个批次</span>
+              </label>
+
+              <label className="settings-parameter-field">
+                <span className="settings-field-label">请求超时</span>
+                <input
+                  type="number"
+                  className="settings-input settings-number-input"
+                  style={styles.input}
+                  value={formData.timeoutSeconds}
+                  onChange={(event) => setFormData({
+                    ...formData,
+                    timeoutSeconds: Number.parseInt(event.target.value, 10) || 60,
+                  })}
+                  min="5"
+                  max="300"
+                />
+                <span className="settings-field-hint">单次请求 5 至 300 秒</span>
               </label>
             </div>
-          </div>
+          </section>
 
-          <div style={styles.section}>
+          <section className="settings-section settings-prompt-section">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
               <div style={styles.sectionTitle}>系统提示词</div>
               <button 
@@ -259,6 +344,7 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
               </button>
             </div>
             <textarea
+              className="settings-prompt-input"
               style={styles.textarea}
               value={formData.prompt}
               onChange={(e) => setFormData({ ...formData, prompt: e.target.value })}
@@ -283,15 +369,19 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
 ]`}
               </div>
             </div>
-          </div>
+          </section>
         </div>
 
         <div style={styles.footer}>
-          <button className="btn" onClick={onClose}>
+          <button className="btn" onClick={handleClose} disabled={isSaving}>
             取消
           </button>
-          <button className="btn btn-primary" onClick={handleSave}>
-            保存
+          <button
+            className="btn btn-primary"
+            onClick={handleSave}
+            disabled={isSaving}
+          >
+            {isSaving ? '保存中...' : '保存设置'}
           </button>
         </div>
       </div>

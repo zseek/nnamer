@@ -34,6 +34,15 @@ pub struct RenameResult {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecycleBinOperation {
+    pub file_id: String,
+    pub original_name: String,
+    pub size_bytes: u64,
+    pub modified_at: u64,
+}
+
 #[tauri::command]
 pub fn scan_directory(directory_path: String) -> AppResult<Vec<ScannedFile>> {
     let directory = Path::new(&directory_path);
@@ -92,41 +101,93 @@ pub fn scan_directory(directory_path: String) -> AppResult<Vec<ScannedFile>> {
 }
 
 #[tauri::command]
-pub fn move_files_to_recycle_bin(file_paths: Vec<String>) -> AppResult<Vec<RenameResult>> {
-    let mut results = Vec::new();
+pub fn move_files_to_recycle_bin(
+    directory_path: String,
+    operations: Vec<RecycleBinOperation>,
+) -> AppResult<Vec<RenameResult>> {
+    let directory = Path::new(&directory_path);
+    if !directory.is_dir() {
+        return Err(AppError::Validation("目录路径无效".to_string()));
+    }
 
-    for file_path_string in file_paths {
-        let file_path = PathBuf::from(&file_path_string);
-        let file_id = file_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("unknown")
-            .to_string();
+    let mut results = Vec::with_capacity(operations.len());
 
-        if !file_path.exists() {
-            results.push(RenameResult {
-                file_id: file_id.clone(),
-                success: false,
-                error: Some("文件不存在".to_string()),
-            });
-            continue;
-        }
+    for operation in operations {
+        let file_path = match validate_recycle_bin_candidate(directory, &operation) {
+            Ok(validated_path) => validated_path,
+            Err(error) => {
+                results.push(RenameResult {
+                    file_id: operation.file_id,
+                    success: false,
+                    error: Some(error.to_string()),
+                });
+                continue;
+            }
+        };
 
         match trash::delete(&file_path) {
             Ok(_) => results.push(RenameResult {
-                file_id,
+                file_id: operation.file_id,
                 success: true,
                 error: None,
             }),
             Err(error) => results.push(RenameResult {
-                file_id,
+                file_id: operation.file_id,
                 success: false,
-                error: Some(format!("移入回收站失败：{}", error)),
+                error: Some(format!("移入回收站失败：{error}")),
             }),
         }
     }
 
     Ok(results)
+}
+
+fn validate_recycle_bin_candidate(
+    directory: &Path,
+    operation: &RecycleBinOperation,
+) -> AppResult<PathBuf> {
+    if operation.file_id.trim().is_empty() {
+        return Err(AppError::Validation("文件标识不能为空".to_string()));
+    }
+
+    let original_name_path = Path::new(&operation.original_name);
+    let contains_path_separator =
+        operation.original_name.contains('/') || operation.original_name.contains('\\');
+    let is_single_file_name = !contains_path_separator
+        && original_name_path.components().count() == 1
+        && original_name_path
+            .file_name()
+            .and_then(|file_name| file_name.to_str())
+            == Some(operation.original_name.as_str());
+
+    if !is_single_file_name {
+        return Err(AppError::Validation("文件名必须位于当前目录中".to_string()));
+    }
+
+    let is_txt_file = original_name_path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"));
+    if !is_txt_file {
+        return Err(AppError::Validation(
+            "只能将 TXT 文件移入回收站".to_string(),
+        ));
+    }
+
+    let file_path = directory.join(original_name_path);
+    let file_type = fs::symlink_metadata(&file_path)?.file_type();
+    if !file_type.is_file() {
+        return Err(AppError::Validation("目标不是普通文件".to_string()));
+    }
+
+    verify_metadata_unchanged(
+        &file_path,
+        &FileMetadataSnapshot {
+            size_bytes: operation.size_bytes,
+            modified_at: operation.modified_at,
+        },
+    )?;
+
+    Ok(file_path)
 }
 
 #[tauri::command]
@@ -251,10 +312,7 @@ pub struct FileMetadataSnapshot {
     pub modified_at: u64,
 }
 
-fn verify_metadata_unchanged(
-    file_path: &Path,
-    snapshot: &FileMetadataSnapshot,
-) -> AppResult<()> {
+fn verify_metadata_unchanged(file_path: &Path, snapshot: &FileMetadataSnapshot) -> AppResult<()> {
     let metadata = fs::metadata(file_path)?;
     let current_size = metadata.len();
     let current_modified = metadata
@@ -277,6 +335,50 @@ fn verify_metadata_unchanged(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validates_recycle_bin_candidate_metadata_and_location() {
+        let test_directory =
+            std::env::temp_dir().join(format!("nnamer_recycle_validation_{}", Uuid::new_v4()));
+        fs::create_dir_all(&test_directory).unwrap();
+        let file_path = test_directory.join("连载小说（600）.txt");
+        fs::write(&file_path, b"complete novel content").unwrap();
+
+        let metadata = fs::metadata(&file_path).unwrap();
+        let modified_at = metadata
+            .modified()
+            .unwrap()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let valid_operation = RecycleBinOperation {
+            file_id: "file-600".to_string(),
+            original_name: "连载小说（600）.txt".to_string(),
+            size_bytes: metadata.len(),
+            modified_at,
+        };
+
+        assert_eq!(
+            validate_recycle_bin_candidate(&test_directory, &valid_operation).unwrap(),
+            file_path
+        );
+
+        let traversal_operation = RecycleBinOperation {
+            original_name: "..\\outside.txt".to_string(),
+            ..valid_operation.clone()
+        };
+        assert!(validate_recycle_bin_candidate(&test_directory, &traversal_operation).is_err());
+
+        let changed_metadata_operation = RecycleBinOperation {
+            size_bytes: metadata.len() + 1,
+            ..valid_operation
+        };
+        assert!(
+            validate_recycle_bin_candidate(&test_directory, &changed_metadata_operation).is_err()
+        );
+
+        fs::remove_dir_all(test_directory).unwrap();
+    }
 
     #[test]
     fn creates_two_stage_rename_plan() {

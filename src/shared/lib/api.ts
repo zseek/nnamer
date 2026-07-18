@@ -2,6 +2,9 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   AppSettings,
   BatchAnalysisResult,
+  FileOperationResult,
+  RecycleBinOperation,
+  RenameResult,
   ScannedFile,
 } from '../types';
 
@@ -29,16 +32,22 @@ export async function analyzeBatch(
   });
 }
 
-export async function moveFilesToRecycleBin(filePaths: string[]): Promise<any[]> {
-  return await invoke('move_files_to_recycle_bin', { filePaths });
+export async function moveFilesToRecycleBin(
+  directoryPath: string,
+  operations: RecycleBinOperation[]
+): Promise<FileOperationResult[]> {
+  return await invoke<FileOperationResult[]>('move_files_to_recycle_bin', {
+    directoryPath,
+    operations,
+  });
 }
 
 export async function executeRenameOperations(
   directoryPath: string,
   operations: Array<{ sourcePath: string; targetName: string }>,
   fileMetadataSnapshot: Record<string, { sizeBytes: number; modifiedAt: number }>
-): Promise<any[]> {
-  return await invoke('execute_rename_operations', {
+): Promise<RenameResult[]> {
+  return await invoke<RenameResult[]>('execute_rename_operations', {
     directoryPath,
     operations,
     fileMetadataSnapshot,

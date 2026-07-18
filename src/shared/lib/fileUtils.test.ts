@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { FileItem } from '../types';
 import {
+  createConflictCleanupPlan,
+  getSelectedExecutableFiles,
   recomputeFileStatuses,
   stripTxtExtension,
   validateSuggestedName,
@@ -45,7 +47,142 @@ describe('validateSuggestedName', () => {
   });
 });
 
+describe('getSelectedExecutableFiles', () => {
+  it('returns only selected files that are currently executable', () => {
+    const files = [
+      createFile('selected-ready', {
+        selected: true,
+        status: 'ready',
+      }),
+      createFile('unselected-ready', {
+        selected: false,
+        status: 'ready',
+      }),
+      createFile('selected-conflict', {
+        selected: true,
+        status: 'conflict',
+      }),
+      createFile('selected-failed', {
+        selected: true,
+        status: 'failed',
+      }),
+    ];
+
+    expect(getSelectedExecutableFiles(files).map((file) => file.id)).toEqual([
+      'selected-ready',
+    ]);
+  });
+});
+
+describe('createConflictCleanupPlan', () => {
+  it('retains the unique largest file and schedules smaller conflicts for removal', () => {
+    const files = [
+      createFile('smaller', {
+        originalName: '连载小说（556）.txt',
+        sizeBytes: 556,
+        suggestedName: '连载小说',
+        normalizedName: '连载小说',
+        status: 'conflict',
+      }),
+      createFile('largest', {
+        originalName: '连载小说（600）.txt',
+        sizeBytes: 600,
+        suggestedName: '连载小说',
+        normalizedName: '连载小说',
+        status: 'conflict',
+      }),
+      createFile('smallest', {
+        originalName: '连载小说（500）.txt',
+        sizeBytes: 500,
+        suggestedName: '连载小说',
+        normalizedName: '连载小说',
+        status: 'conflict',
+      }),
+    ];
+
+    const cleanupPlan = createConflictCleanupPlan(files);
+
+    expect(cleanupPlan.resolvableGroups).toHaveLength(1);
+    expect(cleanupPlan.resolvableGroups[0].retainedFile.id).toBe('largest');
+    expect(
+      cleanupPlan.resolvableGroups[0].filesToRemove.map((file) => file.id)
+    ).toEqual(['smaller', 'smallest']);
+    expect(cleanupPlan.filesToRemove.map((file) => file.id)).toEqual([
+      'smaller',
+      'smallest',
+    ]);
+    expect(cleanupPlan.skippedGroups).toHaveLength(0);
+  });
+
+  it('skips a conflict group when the largest file size is tied', () => {
+    const files = [
+      createFile('first-largest', {
+        sizeBytes: 600,
+        suggestedName: '相同书名',
+        normalizedName: '相同书名',
+        status: 'conflict',
+      }),
+      createFile('second-largest', {
+        sizeBytes: 600,
+        suggestedName: '相同书名',
+        normalizedName: '相同书名',
+        status: 'conflict',
+      }),
+      createFile('smaller', {
+        sizeBytes: 500,
+        suggestedName: '相同书名',
+        normalizedName: '相同书名',
+        status: 'conflict',
+      }),
+    ];
+
+    const cleanupPlan = createConflictCleanupPlan(files);
+
+    expect(cleanupPlan.resolvableGroups).toHaveLength(0);
+    expect(cleanupPlan.filesToRemove).toHaveLength(0);
+    expect(cleanupPlan.skippedGroups).toHaveLength(1);
+    expect(cleanupPlan.skippedGroups[0].largestFileId).toBeUndefined();
+  });
+
+  it('ignores duplicate names that are not currently valid conflicts', () => {
+    const files = [
+      createFile('ready', {
+        sizeBytes: 600,
+        suggestedName: '相同书名',
+        normalizedName: '相同书名',
+        status: 'ready',
+      }),
+      createFile('failed', {
+        sizeBytes: 500,
+        suggestedName: '相同书名',
+        normalizedName: '相同书名',
+        error: '分析失败',
+        status: 'failed',
+      }),
+    ];
+
+    const cleanupPlan = createConflictCleanupPlan(files);
+
+    expect(cleanupPlan.resolvableGroups).toHaveLength(0);
+    expect(cleanupPlan.skippedGroups).toHaveLength(0);
+    expect(cleanupPlan.filesToRemove).toHaveLength(0);
+  });
+});
+
 describe('recomputeFileStatuses', () => {
+  it('preserves file references when their derived status does not change', () => {
+    const stableReadyFile = createFile('stable-ready', {
+      originalStem: '原书名',
+      suggestedName: '新书名',
+      normalizedName: '新书名',
+      status: 'ready',
+    });
+
+    const recomputedFiles = recomputeFileStatuses([stableReadyFile]);
+
+    expect(recomputedFiles[0]).toBe(stableReadyFile);
+  });
+
   it('marks duplicate suggestions as conflicts', () => {
     const files = [
       createFile('first', {

@@ -4,6 +4,7 @@ import { useAppStore } from './store';
 import {
   collectFileIdsLeavingStatusFilter,
   formatFileSize,
+  getFileIdsInSelectionRange,
   getStatusLabel,
   recomputeFileStatuses,
   stripTxtExtension,
@@ -84,6 +85,11 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: 'hsl(var(--color-text-secondary))',
     textAlign: 'center',
   },
+  selectionHint: {
+    marginLeft: '8px',
+    color: 'hsl(var(--color-text-secondary) / 0.78)',
+    fontSize: '10px',
+  },
 };
 
 type SortField = 'originalStem' | 'suggestedName' | null;
@@ -118,8 +124,12 @@ const SUGGESTED_NAME_COMMIT_DELAY_MILLISECONDS = 120;
 interface FileTableRowProps {
   file: FileItem;
   rowIndex: number;
-  onSelectionChange: (fileId: string, isSelected: boolean) => void;
-  onSelectionToggle: (fileId: string) => void;
+  onSelectionChange: (
+    fileId: string,
+    isSelected: boolean,
+    isRangeSelection: boolean
+  ) => void;
+  onSelectionToggle: (fileId: string, isRangeSelection: boolean) => void;
   onSuggestedNameChange: (fileId: string, inputValue: string) => void;
 }
 
@@ -187,6 +197,26 @@ const FileTableRow = memo(function FileTableRow({
     }, SUGGESTED_NAME_COMMIT_DELAY_MILLISECONDS);
   };
 
+  const handleRowMouseDown = (
+    event: React.MouseEvent<HTMLTableRowElement>
+  ) => {
+    if (!event.shiftKey) {
+      return;
+    }
+
+    const clickedElement = event.target as HTMLElement;
+    const isInteractiveControl = clickedElement.closest(
+      'input, button, select, textarea, a'
+    );
+
+    if (isInteractiveControl) {
+      return;
+    }
+
+    event.preventDefault();
+    window.getSelection()?.removeAllRanges();
+  };
+
   const handleRowClick = (event: React.MouseEvent<HTMLTableRowElement>) => {
     const clickedElement = event.target as HTMLElement;
     const isExcludedSelectionArea = clickedElement.closest(
@@ -194,7 +224,7 @@ const FileTableRow = memo(function FileTableRow({
     );
 
     if (!isExcludedSelectionArea) {
-      onSelectionToggle(file.id);
+      onSelectionToggle(file.id, event.shiftKey);
     }
   };
 
@@ -202,6 +232,7 @@ const FileTableRow = memo(function FileTableRow({
     <tr
       aria-rowindex={rowIndex}
       className={`file-row${file.selected ? ' is-selected' : ''}`}
+      onMouseDown={handleRowMouseDown}
       onClick={handleRowClick}
     >
       <td className="file-checkbox-cell" style={styles.td}>
@@ -212,7 +243,11 @@ const FileTableRow = memo(function FileTableRow({
           aria-label={`选择 ${file.originalStem}`}
           checked={file.selected}
           onChange={(event) =>
-            onSelectionChange(file.id, event.target.checked)
+            onSelectionChange(
+              file.id,
+              event.target.checked,
+              (event.nativeEvent as MouseEvent).shiftKey
+            )
           }
         />
       </td>
@@ -268,6 +303,8 @@ export default function FileList() {
   );
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
   const tableScrollerRef = useRef<HTMLDivElement>(null);
+  const selectionAnchorFileIdRef = useRef<string | null>(null);
+  const orderedVisibleFilesRef = useRef<ReadonlyArray<Pick<FileItem, 'id'>>>([]);
 
   const statusCounts = useMemo<Record<StatusFilter, number>>(() => {
     const counts: Record<StatusFilter, number> = {
@@ -319,6 +356,7 @@ export default function FileList() {
       return sortOrder === 'asc' ? comparison : -comparison;
     });
   }, [filteredFiles, sortField, sortOrder]);
+  orderedVisibleFilesRef.current = sortedFiles;
 
   const fileVirtualizer = useVirtualizer({
     count: sortedFiles.length,
@@ -345,6 +383,8 @@ export default function FileList() {
     selectedFilteredCount > 0 && !areAllFilteredFilesSelected;
 
   useEffect(() => {
+    selectionAnchorFileIdRef.current = null;
+
     if (currentDirectory !== null) {
       return;
     }
@@ -366,6 +406,8 @@ export default function FileList() {
   }, [activeStatusFilter, sortField, sortOrder]);
 
   const handleSort = (field: SortField) => {
+    selectionAnchorFileIdRef.current = null;
+
     if (sortField === field) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
     } else {
@@ -388,7 +430,30 @@ export default function FileList() {
   };
 
   const handleFileSelectionChange = useCallback(
-    (fileId: string, isSelected: boolean) => {
+    (fileId: string, isSelected: boolean, isRangeSelection: boolean) => {
+      if (isRangeSelection) {
+        const selectionRangeFileIds = getFileIdsInSelectionRange(
+          orderedVisibleFilesRef.current,
+          selectionAnchorFileIdRef.current,
+          fileId
+        );
+        const selectedFileIds = new Set(
+          selectionRangeFileIds.length > 0 ? selectionRangeFileIds : [fileId]
+        );
+
+        setFiles((currentFiles) =>
+          currentFiles.map((file) =>
+            selectedFileIds.has(file.id) && !file.selected
+              ? { ...file, selected: true }
+              : file
+          )
+        );
+        selectionAnchorFileIdRef.current =
+          selectionRangeFileIds.length > 0 ? selectionAnchorFileIdRef.current : fileId;
+        return;
+      }
+
+      selectionAnchorFileIdRef.current = fileId;
       setFiles((currentFiles) =>
         currentFiles.map((file) => {
           if (file.id !== fileId || file.selected === isSelected) {
@@ -403,7 +468,30 @@ export default function FileList() {
   );
 
   const handleRowSelectionToggle = useCallback(
-    (fileId: string) => {
+    (fileId: string, isRangeSelection: boolean) => {
+      if (isRangeSelection) {
+        const selectionRangeFileIds = getFileIdsInSelectionRange(
+          orderedVisibleFilesRef.current,
+          selectionAnchorFileIdRef.current,
+          fileId
+        );
+        const selectedFileIds = new Set(
+          selectionRangeFileIds.length > 0 ? selectionRangeFileIds : [fileId]
+        );
+
+        setFiles((currentFiles) =>
+          currentFiles.map((file) =>
+            selectedFileIds.has(file.id) && !file.selected
+              ? { ...file, selected: true }
+              : file
+          )
+        );
+        selectionAnchorFileIdRef.current =
+          selectionRangeFileIds.length > 0 ? selectionAnchorFileIdRef.current : fileId;
+        return;
+      }
+
+      selectionAnchorFileIdRef.current = fileId;
       setFiles((currentFiles) =>
         currentFiles.map((file) =>
           file.id === fileId ? { ...file, selected: !file.selected } : file
@@ -414,6 +502,7 @@ export default function FileList() {
   );
 
   const handleStatusFilterChange = (statusFilter: StatusFilter) => {
+    selectionAnchorFileIdRef.current = null;
     setActiveStatusFilter(statusFilter);
     setRetainedEditedFileIds(new Set());
   };
@@ -510,6 +599,7 @@ export default function FileList() {
             );
           })}
         </div>
+        <span style={styles.selectionHint}>按住 Shift 可选择区间</span>
       </div>
 
       <div ref={tableScrollerRef} style={styles.tableScroller}>

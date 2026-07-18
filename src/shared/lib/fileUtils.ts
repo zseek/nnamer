@@ -169,6 +169,34 @@ export function getSelectedExecutableFiles(files: FileItem[]): FileItem[] {
   return files.filter((file) => file.selected && file.status === 'ready');
 }
 
+export function getFileIdsInSelectionRange(
+  orderedFiles: ReadonlyArray<Pick<FileItem, 'id'>>,
+  anchorFileId: string | null,
+  targetFileId: string
+): string[] {
+  if (!anchorFileId) {
+    return [];
+  }
+
+  const anchorIndex = orderedFiles.findIndex(
+    (file) => file.id === anchorFileId
+  );
+  const targetIndex = orderedFiles.findIndex(
+    (file) => file.id === targetFileId
+  );
+
+  if (anchorIndex < 0 || targetIndex < 0) {
+    return [];
+  }
+
+  const rangeStartIndex = Math.min(anchorIndex, targetIndex);
+  const rangeEndIndex = Math.max(anchorIndex, targetIndex);
+
+  return orderedFiles
+    .slice(rangeStartIndex, rangeEndIndex + 1)
+    .map((file) => file.id);
+}
+
 export function applySuccessfulFileRenames(
   files: FileItem[],
   renamedFileTargetById: ReadonlyMap<string, string>

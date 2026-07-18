@@ -4,6 +4,7 @@ import {
   applySuccessfulFileRenames,
   collectFileIdsLeavingStatusFilter,
   createConflictCleanupPlan,
+  getFileIdsInSelectionRange,
   getSelectedExecutableFiles,
   recomputeFileStatuses,
   stripTxtExtension,
@@ -73,6 +74,35 @@ describe('getSelectedExecutableFiles', () => {
     expect(getSelectedExecutableFiles(files).map((file) => file.id)).toEqual([
       'selected-ready',
     ]);
+  });
+});
+
+describe('getFileIdsInSelectionRange', () => {
+  const orderedFiles = [
+    createFile('first'),
+    createFile('second'),
+    createFile('third'),
+    createFile('fourth'),
+    createFile('fifth'),
+  ];
+
+  it('returns the inclusive range in forward and reverse order', () => {
+    expect(getFileIdsInSelectionRange(orderedFiles, 'second', 'fourth')).toEqual([
+      'second',
+      'third',
+      'fourth',
+    ]);
+    expect(getFileIdsInSelectionRange(orderedFiles, 'fourth', 'second')).toEqual([
+      'second',
+      'third',
+      'fourth',
+    ]);
+  });
+
+  it('returns no range when the anchor is absent or not visible', () => {
+    expect(getFileIdsInSelectionRange(orderedFiles, null, 'third')).toEqual([]);
+    expect(getFileIdsInSelectionRange(orderedFiles, 'missing', 'third')).toEqual([]);
+    expect(getFileIdsInSelectionRange(orderedFiles, 'second', 'missing')).toEqual([]);
   });
 });
 

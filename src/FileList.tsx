@@ -2,7 +2,12 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useAppStore } from './store';
 import {
+  OPEN_FILE_SEARCH_EVENT,
+  SELECT_ALL_VISIBLE_FILES_EVENT,
+} from './DesktopInteractionLayer';
+import {
   collectFileIdsLeavingStatusFilter,
+  fileMatchesNameSearch,
   formatFileSize,
   getFileIdsInSelectionRange,
   getStatusLabel,
@@ -273,6 +278,8 @@ const FileTableRow = memo(function FileTableRow({
             value={suggestedNameInput}
             aria-label={`${file.originalStem} 的建议文件名`}
             title={file.error ?? file.suggestedName}
+            spellCheck={false}
+            autoComplete="off"
             onBlur={() => commitSuggestedName(suggestedNameInput)}
             onChange={(event) =>
               handleSuggestedNameInput(event.target.value)
@@ -298,9 +305,12 @@ export default function FileList() {
   const [sortField, setSortField] = useState<SortField>(null);
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [activeStatusFilter, setActiveStatusFilter] = useState<StatusFilter>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [retainedEditedFileIds, setRetainedEditedFileIds] = useState<Set<string>>(
     () => new Set()
   );
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
   const tableScrollerRef = useRef<HTMLDivElement>(null);
   const selectionAnchorFileIdRef = useRef<string | null>(null);
@@ -327,12 +337,13 @@ export default function FileList() {
 
   const filteredFiles = useMemo(
     () => files.filter(
-      (file) =>
+      (file) => (
         activeStatusFilter === 'all'
         || file.status === activeStatusFilter
         || retainedEditedFileIds.has(file.id)
+      ) && fileMatchesNameSearch(file, searchQuery)
     ),
-    [activeStatusFilter, files, retainedEditedFileIds]
+    [activeStatusFilter, files, retainedEditedFileIds, searchQuery]
   );
 
   const sortedFiles = useMemo(() => {
@@ -384,6 +395,8 @@ export default function FileList() {
 
   useEffect(() => {
     selectionAnchorFileIdRef.current = null;
+    setSearchQuery('');
+    setIsSearchOpen(false);
 
     if (currentDirectory !== null) {
       return;
@@ -395,28 +408,7 @@ export default function FileList() {
     setRetainedEditedFileIds(new Set());
   }, [currentDirectory]);
 
-  useEffect(() => {
-    if (selectAllCheckboxRef.current) {
-      selectAllCheckboxRef.current.indeterminate = areSomeFilteredFilesSelected;
-    }
-  }, [areSomeFilteredFilesSelected]);
-
-  useEffect(() => {
-    tableScrollerRef.current?.scrollTo({ top: 0 });
-  }, [activeStatusFilter, sortField, sortOrder]);
-
-  const handleSort = (field: SortField) => {
-    selectionAnchorFileIdRef.current = null;
-
-    if (sortField === field) {
-      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortField(field);
-      setSortOrder('asc');
-    }
-  };
-
-  const handleSelectAll = (checked: boolean) => {
+  const handleSelectAll = useCallback((checked: boolean) => {
     const filteredFileIds = new Set(filteredFiles.map((file) => file.id));
     setFiles((currentFiles) =>
       currentFiles.map((file) => {
@@ -427,6 +419,65 @@ export default function FileList() {
         return { ...file, selected: checked };
       })
     );
+  }, [filteredFiles, setFiles]);
+
+  useEffect(() => {
+    if (selectAllCheckboxRef.current) {
+      selectAllCheckboxRef.current.indeterminate = areSomeFilteredFilesSelected;
+    }
+  }, [areSomeFilteredFilesSelected]);
+
+  useEffect(() => {
+    if (!isSearchOpen) {
+      return;
+    }
+
+    searchInputRef.current?.focus();
+    searchInputRef.current?.select();
+  }, [isSearchOpen]);
+
+  useEffect(() => {
+    const handleOpenSearch = () => {
+      setIsSearchOpen(true);
+      window.requestAnimationFrame(() => {
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      });
+    };
+    const handleSelectAllVisibleFiles = () => handleSelectAll(true);
+
+    window.addEventListener(OPEN_FILE_SEARCH_EVENT, handleOpenSearch);
+    window.addEventListener(
+      SELECT_ALL_VISIBLE_FILES_EVENT,
+      handleSelectAllVisibleFiles
+    );
+
+    return () => {
+      window.removeEventListener(OPEN_FILE_SEARCH_EVENT, handleOpenSearch);
+      window.removeEventListener(
+        SELECT_ALL_VISIBLE_FILES_EVENT,
+        handleSelectAllVisibleFiles
+      );
+    };
+  }, [handleSelectAll]);
+
+  useEffect(() => {
+    selectionAnchorFileIdRef.current = null;
+  }, [searchQuery]);
+
+  useEffect(() => {
+    tableScrollerRef.current?.scrollTo({ top: 0 });
+  }, [activeStatusFilter, searchQuery, sortField, sortOrder]);
+
+  const handleSort = (field: SortField) => {
+    selectionAnchorFileIdRef.current = null;
+
+    if (sortField === field) {
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortOrder('asc');
+    }
   };
 
   const handleFileSelectionChange = useCallback(
@@ -562,6 +613,18 @@ export default function FileList() {
     return sortOrder === 'asc' ? '▲' : '▼';
   };
 
+  const handleCloseSearch = () => {
+    setSearchQuery('');
+    setIsSearchOpen(false);
+  };
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      handleCloseSearch();
+    }
+  };
+
   if (files.length === 0) {
     return (
       <div style={{ 
@@ -577,8 +640,13 @@ export default function FileList() {
   }
 
   return (
-    <div style={styles.container}>
-      <div style={styles.filterBar} role="toolbar" aria-label="文件状态筛选">
+    <div style={styles.container} data-file-list-root="true">
+      <div
+        className="file-filter-bar"
+        style={styles.filterBar}
+        role="toolbar"
+        aria-label="文件筛选与搜索"
+      >
         <span style={styles.filterLabel}>状态筛选</span>
         <div style={styles.filterGroup} role="group" aria-label="按文件状态筛选">
           {STATUS_FILTERS.map((filter) => {
@@ -599,10 +667,64 @@ export default function FileList() {
             );
           })}
         </div>
-        <span style={styles.selectionHint}>按住 Shift 可选择区间</span>
+        <span className="file-selection-hint" style={styles.selectionHint}>按住 Shift 可选择区间</span>
+        <button
+          type="button"
+          className={`file-search-toggle${isSearchOpen ? ' is-active' : ''}`}
+          aria-label="搜索原文件名和建议文件名"
+          aria-pressed={isSearchOpen}
+          title="搜索文件名 (Ctrl+F)"
+          onClick={() => {
+            if (isSearchOpen) {
+              handleCloseSearch();
+              return;
+            }
+
+            setIsSearchOpen(true);
+          }}
+        >
+          搜索
+          <kbd>Ctrl+F</kbd>
+        </button>
       </div>
 
-      <div ref={tableScrollerRef} style={styles.tableScroller}>
+      {isSearchOpen && (
+        <div className="file-search-bar" role="search">
+          <label className="file-search-field">
+            <span className="file-search-label">文件名</span>
+            <input
+              ref={searchInputRef}
+              type="search"
+              className="file-search-input"
+              value={searchQuery}
+              placeholder="搜索原文件名或建议文件名"
+              aria-label="搜索原文件名或建议文件名"
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(event) => setSearchQuery(event.target.value)}
+              onKeyDown={handleSearchKeyDown}
+            />
+          </label>
+          <span className="file-search-result" aria-live="polite">
+            {filteredFiles.length} 个结果
+          </span>
+          <button
+            type="button"
+            className="file-search-close"
+            aria-label="关闭文件名搜索"
+            title="关闭搜索 (Esc)"
+            onClick={handleCloseSearch}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      <div
+        ref={tableScrollerRef}
+        className="file-list-scroller"
+        style={styles.tableScroller}
+      >
         <table
           style={styles.table}
           aria-rowcount={sortedFiles.length + 1}
@@ -617,7 +739,7 @@ export default function FileList() {
                   ref={selectAllCheckboxRef}
                   className="file-checkbox"
                   type="checkbox"
-                  aria-label={`选择当前筛选中的 ${filteredFiles.length} 个文件`}
+                  aria-label={`选择当前列表中的 ${filteredFiles.length} 个文件`}
                   checked={areAllFilteredFilesSelected}
                   disabled={filteredFiles.length === 0}
                   onChange={(event) => handleSelectAll(event.target.checked)}

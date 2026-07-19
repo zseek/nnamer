@@ -4,6 +4,7 @@ import {
   applySuccessfulFileRenames,
   collectFileIdsLeavingStatusFilter,
   createConflictCleanupPlan,
+  fileMatchesNameSearch,
   getFileIdsInSelectionRange,
   getSelectedExecutableFiles,
   recomputeFileStatuses,
@@ -74,6 +75,29 @@ describe('getSelectedExecutableFiles', () => {
     expect(getSelectedExecutableFiles(files).map((file) => file.id)).toEqual([
       'selected-ready',
     ]);
+  });
+});
+
+describe('fileMatchesNameSearch', () => {
+  const file = createFile('original', {
+    originalName: 'AUTHOR-诡秘之主.txt',
+    suggestedName: '诡秘之主',
+    status: 'ready',
+  });
+
+  it('matches original and suggested names case-insensitively', () => {
+    expect(fileMatchesNameSearch(file, 'author')).toBe(true);
+    expect(fileMatchesNameSearch(file, '诡秘之主')).toBe(true);
+    expect(fileMatchesNameSearch(file, 'AUTHOR')).toBe(true);
+  });
+
+  it('treats empty or whitespace-only queries as matching', () => {
+    expect(fileMatchesNameSearch(file, '')).toBe(true);
+    expect(fileMatchesNameSearch(file, '   ')).toBe(true);
+  });
+
+  it('does not search the status label', () => {
+    expect(fileMatchesNameSearch(file, '可执行')).toBe(false);
   });
 });
 

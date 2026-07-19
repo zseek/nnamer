@@ -169,6 +169,22 @@ export function getSelectedExecutableFiles(files: FileItem[]): FileItem[] {
   return files.filter((file) => file.selected && file.status === 'ready');
 }
 
+export function fileMatchesNameSearch(
+  file: Pick<FileItem, 'originalName' | 'suggestedName'>,
+  searchQuery: string
+): boolean {
+  const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase();
+  if (!normalizedSearchQuery) {
+    return true;
+  }
+
+  return [file.originalName, file.suggestedName]
+    .filter((fileName): fileName is string => Boolean(fileName))
+    .some((fileName) =>
+      fileName.toLocaleLowerCase().includes(normalizedSearchQuery)
+    );
+}
+
 export function getFileIdsInSelectionRange(
   orderedFiles: ReadonlyArray<Pick<FileItem, 'id'>>,
   anchorFileId: string | null,

@@ -211,7 +211,8 @@ export default function SettingsDialog({
                     baseUrl: event.target.value,
                   })}
                   placeholder="https://api.openai.com/v1"
-                  autoComplete="url"
+                  spellCheck={false}
+                  autoComplete="off"
                 />
                 <span className="settings-field-hint">OpenAI 兼容接口的基础地址</span>
               </label>
@@ -228,7 +229,8 @@ export default function SettingsDialog({
                     apiKey: event.target.value,
                   })}
                   placeholder="sk-..."
-                  autoComplete="off"
+                  spellCheck={false}
+                  autoComplete="new-password"
                 />
               </label>
 
@@ -244,6 +246,7 @@ export default function SettingsDialog({
                     model: event.target.value,
                   })}
                   placeholder="gpt-4o-mini"
+                  spellCheck={false}
                   autoComplete="off"
                 />
               </label>
@@ -268,6 +271,8 @@ export default function SettingsDialog({
                   className="settings-input settings-number-input"
                   style={styles.input}
                   value={formData.batchSize}
+                  spellCheck={false}
+                  autoComplete="off"
                   onChange={(event) => setFormData({
                     ...formData,
                     batchSize: Number.parseInt(event.target.value, 10) || 1,
@@ -284,6 +289,8 @@ export default function SettingsDialog({
                   className="settings-input settings-number-input"
                   style={styles.input}
                   value={formData.maxRetries}
+                  spellCheck={false}
+                  autoComplete="off"
                   onChange={(event) => setFormData({
                     ...formData,
                     maxRetries: Number.parseInt(event.target.value, 10) || 0,
@@ -300,6 +307,8 @@ export default function SettingsDialog({
                   className="settings-input settings-number-input"
                   style={styles.input}
                   value={formData.concurrency}
+                  spellCheck={false}
+                  autoComplete="off"
                   onChange={(event) => setFormData({
                     ...formData,
                     concurrency: Number.parseInt(event.target.value, 10) || 1,
@@ -316,6 +325,8 @@ export default function SettingsDialog({
                   className="settings-input settings-number-input"
                   style={styles.input}
                   value={formData.timeoutSeconds}
+                  spellCheck={false}
+                  autoComplete="off"
                   onChange={(event) => setFormData({
                     ...formData,
                     timeoutSeconds: Number.parseInt(event.target.value, 10) || 1,
@@ -343,12 +354,14 @@ export default function SettingsDialog({
               className="settings-prompt-input"
               style={styles.textarea}
               value={formData.prompt}
+              spellCheck={false}
+              autoComplete="off"
               onChange={(e) => setFormData({ ...formData, prompt: e.target.value })}
             />
 
             <div style={{ marginTop: '10px' }}>
               <div style={styles.sectionTitle}>输入格式</div>
-              <div style={styles.formatExample}>
+              <div className="selectable-text" style={styles.formatExample}>
 {`[
   {"id": "b8c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e", "filename": "[笔趣阁]诡秘之主(全本)作者爱潜水的乌贼"},
   {"id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "filename": "斗破苍穹-天蚕土豆【完结】"}
@@ -358,7 +371,7 @@ export default function SettingsDialog({
 
             <div style={{ marginTop: '10px' }}>
               <div style={styles.sectionTitle}>期待输出格式</div>
-              <div style={styles.formatExample}>
+              <div className="selectable-text" style={styles.formatExample}>
 {`[
   {"id": "b8c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e", "suggested_name": "诡秘之主"},
   {"id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "suggested_name": "斗破苍穹"}

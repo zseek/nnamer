@@ -5,6 +5,7 @@ import Toolbar from './Toolbar';
 import FileList from './FileList';
 import StatusBar from './StatusBar';
 import Logger from './Logger';
+import DesktopInteractionLayer from './DesktopInteractionLayer';
 
 function App() {
   const { setSettings, showLogger, setShowLogger } = useAppStore();
@@ -19,6 +20,7 @@ function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+      <DesktopInteractionLayer />
       <Toolbar />
       <FileList />
       <StatusBar />

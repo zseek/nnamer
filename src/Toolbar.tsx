@@ -934,7 +934,7 @@ export default function Toolbar() {
             <div className="app-notification-title">{appNotification.title}</div>
             <div className="app-notification-message">{appNotification.message}</div>
             {appNotification.detail && (
-              <div className="app-notification-detail" title={appNotification.detail}>
+              <div className="app-notification-detail selectable-text" title={appNotification.detail}>
                 {appNotification.detail}
               </div>
             )}

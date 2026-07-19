@@ -20,6 +20,18 @@
     box-sizing: border-box;
   }
 
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    overscroll-behavior: none;
+  }
+
+  html {
+    touch-action: pan-x pan-y;
+  }
+
   body {
     font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
     font-size: 13px;
@@ -27,6 +39,22 @@
     background-color: hsl(var(--color-background));
     color: hsl(var(--color-text));
     overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  input,
+  textarea,
+  [contenteditable="true"],
+  .file-original-name,
+  .selectable-text {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  img,
+  a {
+    -webkit-user-drag: none;
   }
 
   button {
@@ -652,6 +680,10 @@
 
 @media (prefers-reduced-motion: reduce) {
   .status-filter-button,
+  .file-search-input,
+  .file-search-toggle,
+  .file-search-close,
+  .desktop-context-menu-item,
   .file-row,
   .file-suggested-input,
   .settings-input,
@@ -669,6 +701,161 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.file-search-toggle {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+  padding: 3px 8px;
+  border: 1px solid hsl(var(--color-border));
+  border-radius: 4px;
+  background: hsl(var(--color-surface));
+  color: hsl(var(--color-text-secondary));
+  font-size: 11px;
+}
+
+.file-search-toggle:hover,
+.file-search-toggle.is-active {
+  border-color: hsl(var(--color-primary) / 0.45);
+  background: hsl(var(--color-primary) / 0.08);
+  color: hsl(var(--color-primary-hover));
+}
+
+.file-search-toggle:focus-visible,
+.file-search-close:focus-visible {
+  outline: 2px solid hsl(var(--color-primary));
+  outline-offset: 2px;
+}
+
+.file-search-toggle kbd {
+  padding: 1px 4px;
+  border: 1px solid hsl(var(--color-border));
+  border-radius: 3px;
+  background: hsl(var(--color-background));
+  font-family: inherit;
+  font-size: 10px;
+}
+
+.file-search-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid hsl(var(--color-border));
+  background: hsl(var(--color-background) / 0.5);
+}
+
+.file-search-field {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-search-label,
+.file-search-result {
+  flex: 0 0 auto;
+  color: hsl(var(--color-text-secondary));
+  font-size: 11px;
+}
+
+.file-search-input {
+  min-width: 0;
+  flex: 1;
+  height: 28px;
+  padding: 4px 8px;
+  border: 1px solid hsl(var(--color-border));
+  border-radius: 4px;
+  outline: none;
+  background: hsl(var(--color-surface));
+  color: hsl(var(--color-text));
+  font-size: 12px;
+}
+
+.file-search-input:focus {
+  border-color: hsl(var(--color-primary));
+  box-shadow: 0 0 0 2px hsl(var(--color-primary) / 0.12);
+}
+
+.file-search-close {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: hsl(var(--color-text-secondary));
+  font-size: 18px;
+  line-height: 1;
+}
+
+.file-search-close:hover {
+  background: hsl(var(--color-border) / 0.6);
+  color: hsl(var(--color-text));
+}
+
+.desktop-context-menu {
+  position: fixed;
+  z-index: 1500;
+  min-width: 156px;
+  max-width: 280px;
+  padding: 4px;
+  border: 1px solid hsl(var(--color-border));
+  border-radius: 5px;
+  background: hsl(var(--color-surface));
+  box-shadow: 0 8px 24px hsl(220 30% 10% / 0.18);
+  outline: none;
+}
+
+.desktop-context-menu-empty {
+  padding: 7px 10px;
+  color: hsl(var(--color-text-secondary));
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.desktop-context-menu-item {
+  width: 100%;
+  display: block;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: hsl(var(--color-text));
+  font-size: 12px;
+  text-align: left;
+}
+
+.desktop-context-menu-item:hover:not(:disabled),
+.desktop-context-menu-item:focus-visible:not(:disabled) {
+  background: hsl(var(--color-primary) / 0.1);
+  color: hsl(var(--color-primary-hover));
+  outline: none;
+}
+
+.desktop-context-menu-item:disabled {
+  color: hsl(var(--color-text-secondary) / 0.5);
+  cursor: not-allowed;
+}
+
+@media (max-width: 960px) {
+  .file-filter-bar {
+    flex-wrap: wrap;
+  }
+
+  .file-selection-hint {
+    display: none;
+  }
+
+  .file-search-toggle {
+    margin-left: auto;
+  }
 }
 
 .file-sort-indicator {
@@ -692,6 +879,10 @@
   vertical-align: middle;
   accent-color: hsl(var(--color-primary));
   cursor: pointer;
+}
+
+.file-list-scroller {
+  overscroll-behavior: contain;
 }
 
 .file-row {

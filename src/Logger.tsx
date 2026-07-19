@@ -151,7 +151,7 @@ export default function Logger({ isOpen, onClose }: LoggerProps) {
           </button>
         </div>
       </div>
-      <div style={styles.logList} ref={logListRef}>
+      <div className="logger-list selectable-text" style={styles.logList} ref={logListRef}>
         {logs.map((log, index) => (
           <div key={index} style={styles.logEntry}>
             <span style={styles.timestamp}>{formatTimestamp(log.timestamp)}</span>

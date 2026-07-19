@@ -83,18 +83,14 @@ pub fn scan_directory(directory_path: String) -> AppResult<Vec<ScannedFile>> {
             .ok_or_else(|| AppError::Validation("无法提取文件名主干".to_string()))?
             .to_string();
 
-        let modified_at = metadata
-            .modified()?
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos() as u64)
-            .unwrap_or(0);
-
         scanned_files.push(ScannedFile {
             id: Uuid::new_v4().to_string(),
             original_name,
             original_stem,
             size_bytes: metadata.len(),
-            modified_at,
+            // 使用毫秒而非纳秒：前端 Number 只有 53 位有效精度，
+            // 纳秒时间戳经 IPC/JSON 往返会失真，导致元数据校验误报。
+            modified_at: file_modified_at_millis(&metadata)?,
         });
     }
 
@@ -331,14 +327,18 @@ pub struct FileMetadataSnapshot {
     pub modified_at: u64,
 }
 
+fn file_modified_at_millis(metadata: &fs::Metadata) -> AppResult<u64> {
+    Ok(metadata
+        .modified()?
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0))
+}
+
 fn verify_metadata_unchanged(file_path: &Path, snapshot: &FileMetadataSnapshot) -> AppResult<()> {
     let metadata = fs::metadata(file_path)?;
     let current_size = metadata.len();
-    let current_modified = metadata
-        .modified()?
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos() as u64)
-        .unwrap_or(0);
+    let current_modified = file_modified_at_millis(&metadata)?;
 
     if current_size != snapshot.size_bytes {
         return Err(AppError::Validation("文件大小已改变".to_string()));
@@ -364,12 +364,7 @@ mod tests {
         fs::write(&file_path, b"complete novel content").unwrap();
 
         let metadata = fs::metadata(&file_path).unwrap();
-        let modified_at = metadata
-            .modified()
-            .unwrap()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as u64;
+        let modified_at = file_modified_at_millis(&metadata).unwrap();
         let valid_operation = RecycleBinOperation {
             file_id: "file-600".to_string(),
             original_name: "连载小说（600）.txt".to_string(),
@@ -394,6 +389,52 @@ mod tests {
         };
         assert!(
             validate_recycle_bin_candidate(&test_directory, &changed_metadata_operation).is_err()
+        );
+
+        fs::remove_dir_all(test_directory).unwrap();
+    }
+
+    #[test]
+    fn millisecond_timestamps_survive_javascript_number_roundtrip() {
+        // 模拟前端 Number（IEEE754 双精度）对时间戳的往返转换。
+        let sample_nanos: u64 = 1_784_450_729_804_521_600;
+        let nanos_after_js_roundtrip = sample_nanos as f64 as u64;
+        assert_ne!(
+            sample_nanos, nanos_after_js_roundtrip,
+            "纳秒时间戳经 JS Number 往返会失真"
+        );
+
+        let sample_millis = sample_nanos / 1_000_000;
+        let millis_after_js_roundtrip = sample_millis as f64 as u64;
+        assert_eq!(
+            sample_millis, millis_after_js_roundtrip,
+            "毫秒时间戳应能安全经过 JS Number 往返"
+        );
+    }
+
+    #[test]
+    fn recycle_bin_accepts_timestamp_after_javascript_number_roundtrip() {
+        let test_directory =
+            std::env::temp_dir().join(format!("nnamer_js_timestamp_roundtrip_{}", Uuid::new_v4()));
+        fs::create_dir_all(&test_directory).unwrap();
+        let file_path = test_directory.join("予母所爱 1-62.txt");
+        fs::write(&file_path, b"novel content for recycle bin").unwrap();
+
+        let metadata = fs::metadata(&file_path).unwrap();
+        let scanned_modified_at = file_modified_at_millis(&metadata).unwrap();
+        // 模拟毫秒时间戳经过前端 Number 与 IPC 的往返过程。
+        let frontend_modified_at = scanned_modified_at as f64 as u64;
+
+        let operation = RecycleBinOperation {
+            file_id: "file-js-roundtrip".to_string(),
+            original_name: "予母所爱 1-62.txt".to_string(),
+            size_bytes: metadata.len(),
+            modified_at: frontend_modified_at,
+        };
+
+        assert_eq!(
+            validate_recycle_bin_candidate(&test_directory, &operation).unwrap(),
+            file_path
         );
 
         fs::remove_dir_all(test_directory).unwrap();

@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -19,9 +22,9 @@ jobs:
           node-version: '20'
 
       - name: 安装 pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@v4
         with:
-          version: 8
+          version: 10
 
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
@@ -47,7 +50,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            Nnamer_${{ github.ref_name }}_x64.exe
+            Nnamer_*_x64.exe
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*-setup.exe
           generate_release_notes: true

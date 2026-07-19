@@ -60,6 +60,7 @@ export interface RecycleBinOperation {
   modifiedAt: number;
 }
 
+
 export interface FileOperationResult {
   fileId: string;
   success: boolean;

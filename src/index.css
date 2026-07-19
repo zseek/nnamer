@@ -982,6 +982,39 @@
   }
 }
 
+.permanent-delete-dialog {
+  width: min(500px, calc(100vw - 40px));
+}
+
+.permanent-delete-file {
+  margin: 0 18px;
+  padding: 10px 12px;
+  overflow: hidden;
+  border: 1px solid hsl(var(--color-error) / 0.2);
+  border-radius: 5px;
+  background: hsl(var(--color-error) / 0.04);
+  color: hsl(var(--color-text));
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.permanent-delete-notice {
+  margin-bottom: 14px;
+}
+
+@media (max-width: 560px) {
+  .operation-confirmation-actions {
+    flex-wrap: wrap;
+  }
+
+  .operation-confirmation-actions .btn {
+    flex: 1 1 140px;
+  }
+}
+
 .operation-confirmation-backdrop {
   position: fixed;
   inset: 0;
@@ -1556,6 +1589,16 @@
   background: hsl(var(--color-primary) / 0.1);
   color: hsl(var(--color-primary-hover));
   outline: none;
+}
+
+.desktop-context-menu-item-danger {
+  color: hsl(0 64% 40%);
+}
+
+.desktop-context-menu-item-danger:hover:not(:disabled),
+.desktop-context-menu-item-danger:focus-visible:not(:disabled) {
+  background: hsl(var(--color-error) / 0.1);
+  color: hsl(0 68% 36%);
 }
 
 .desktop-context-menu-item:disabled {

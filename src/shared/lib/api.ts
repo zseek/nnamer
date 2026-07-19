@@ -44,6 +44,18 @@ export async function moveFilesToRecycleBin(
   });
 }
 
+export async function moveFileToRecycleBin(
+  directoryPath: string,
+  operation: RecycleBinOperation
+): Promise<FileOperationResult> {
+  const results = await moveFilesToRecycleBin(directoryPath, [operation]);
+  return results[0] ?? {
+    fileId: operation.fileId,
+    success: false,
+    error: '回收站操作没有返回结果',
+  };
+}
+
 export async function executeRenameOperations(
   directoryPath: string,
   operations: Array<{ sourcePath: string; targetName: string }>,

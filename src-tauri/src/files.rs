@@ -142,23 +142,30 @@ pub fn move_files_to_recycle_bin(
     Ok(results)
 }
 
-fn validate_recycle_bin_candidate(
+#[derive(Debug)]
+struct ValidatedFileCandidate {
+    file_path: PathBuf,
+}
+
+fn validate_file_candidate(
     directory: &Path,
-    operation: &RecycleBinOperation,
-) -> AppResult<PathBuf> {
-    if operation.file_id.trim().is_empty() {
+    file_id: &str,
+    original_name: &str,
+    size_bytes: u64,
+    modified_at: u64,
+) -> AppResult<ValidatedFileCandidate> {
+    if file_id.trim().is_empty() {
         return Err(AppError::Validation("文件标识不能为空".to_string()));
     }
 
-    let original_name_path = Path::new(&operation.original_name);
-    let contains_path_separator =
-        operation.original_name.contains('/') || operation.original_name.contains('\\');
+    let original_name_path = Path::new(original_name);
+    let contains_path_separator = original_name.contains('/') || original_name.contains('\\');
     let is_single_file_name = !contains_path_separator
         && original_name_path.components().count() == 1
         && original_name_path
             .file_name()
             .and_then(|file_name| file_name.to_str())
-            == Some(operation.original_name.as_str());
+            == Some(original_name);
 
     if !is_single_file_name {
         return Err(AppError::Validation("文件名必须位于当前目录中".to_string()));
@@ -168,9 +175,7 @@ fn validate_recycle_bin_candidate(
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"));
     if !is_txt_file {
-        return Err(AppError::Validation(
-            "只能将 TXT 文件移入回收站".to_string(),
-        ));
+        return Err(AppError::Validation("只能操作 TXT 文件".to_string()));
     }
 
     let file_path = directory.join(original_name_path);
@@ -179,15 +184,27 @@ fn validate_recycle_bin_candidate(
         return Err(AppError::Validation("目标不是普通文件".to_string()));
     }
 
-    verify_metadata_unchanged(
-        &file_path,
-        &FileMetadataSnapshot {
-            size_bytes: operation.size_bytes,
-            modified_at: operation.modified_at,
-        },
-    )?;
+    let metadata_snapshot = FileMetadataSnapshot {
+        size_bytes,
+        modified_at,
+    };
+    verify_metadata_unchanged(&file_path, &metadata_snapshot)?;
 
-    Ok(file_path)
+    Ok(ValidatedFileCandidate { file_path })
+}
+
+fn validate_recycle_bin_candidate(
+    directory: &Path,
+    operation: &RecycleBinOperation,
+) -> AppResult<PathBuf> {
+    Ok(validate_file_candidate(
+        directory,
+        &operation.file_id,
+        &operation.original_name,
+        operation.size_bytes,
+        operation.modified_at,
+    )?
+    .file_path)
 }
 
 #[tauri::command]

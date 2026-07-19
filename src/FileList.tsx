@@ -235,6 +235,7 @@ const FileTableRow = memo(function FileTableRow({
 
   return (
     <tr
+      data-file-row-id={file.id}
       aria-rowindex={rowIndex}
       className={`file-row${file.selected ? ' is-selected' : ''}`}
       onMouseDown={handleRowMouseDown}

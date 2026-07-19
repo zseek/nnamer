@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 8
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装依赖
+        run: pnpm install
+
+      - name: 运行测试
+        run: |
+          pnpm test
+          cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: 构建应用
+        run: pnpm build
+
+      - name: 准备发布文件
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          Copy-Item "src-tauri/target/release/nnamer.exe" "Nnamer_${version}_x64.exe"
+        shell: powershell
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Nnamer_${{ github.ref_name }}_x64.exe
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

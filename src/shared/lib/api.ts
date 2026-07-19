@@ -4,6 +4,7 @@ import type {
   BatchAnalysisResult,
   FileOperationResult,
   RecycleBinOperation,
+  RenameOperation,
   RenameResult,
   ScannedFile,
 } from '../types';
@@ -58,7 +59,7 @@ export async function moveFileToRecycleBin(
 
 export async function executeRenameOperations(
   directoryPath: string,
-  operations: Array<{ sourcePath: string; targetName: string }>,
+  operations: RenameOperation[],
   fileMetadataSnapshot: Record<string, { sizeBytes: number; modifiedAt: number }>
 ): Promise<RenameResult[]> {
   return await invoke<RenameResult[]>('execute_rename_operations', {

@@ -60,7 +60,6 @@ export interface RecycleBinOperation {
   modifiedAt: number;
 }
 
-
 export interface FileOperationResult {
   fileId: string;
   success: boolean;
@@ -68,6 +67,12 @@ export interface FileOperationResult {
 }
 
 export type RenameResult = FileOperationResult;
+
+export interface RenameOperation {
+  fileId: string;
+  originalName: string;
+  targetName: string;
+}
 
 export interface AnalysisProgress {
   totalBatches: number;

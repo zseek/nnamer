@@ -1,189 +1,168 @@
-# Nnamer
 
-TXT 小说批量智能命名工具。使用 LLM API 分析文件名并自动重命名，支持冲突检测和安全去重。
+<p align="center">
+  <h1 align="center">Nnamer</h1>
+  <p align="center"><strong>本地 TXT 小说文件批量智能重命名工具</strong></p>
+</p>
 
-## ✨ 功能特性
+<p align="center">
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="https://v2.tauri.app/"><img src="https://img.shields.io/badge/Tauri-2-24C8D8?logo=tauri" alt="Tauri"></a>
+  <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-19-61DAFB?logo=react" alt="React"></a>
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-stable-orange?logo=rust" alt="Rust"></a>
+</p>
 
-- 📁 扫描指定目录的 TXT 文件（仅第一层，非递归）
-- 🤖 批量调用 OpenAI 兼容 API 智能识别小说书名
-- 🔍 自动检测命名冲突
-- 🗑️ 同一书名保留最大文件，其余移入回收站
-- 🛡️ 两阶段安全重命名，防止覆盖和循环依赖
-- 💾 Windows 原生回收站支持
-- ⚙️ 完整的设置界面：API 配置、模型、批次大小、重试次数、并发数和系统提示词
-- ✏️ 可编辑的建议文件名
-- ✅ 全选、单选以及 Shift 可见区间选择
-- 📊 实时状态统计和进度显示
+<p align="center">使用 AI 智能生成建议文件名进行批量重命名，智能整理本地 TXT 小说文件名</p>
 
-## 🖥️ 界面预览
+<p align="center">
+  <a href="#功能特性">功能特性</a> •
+  <a href="#快速开始">快速开始</a> •
+  <a href="#使用指南">使用指南</a> •
+  <a href="#开发">开发</a>
+</p>
 
-简洁的桌面工具风格界面：
-- **工具栏**：选择目录、设置、分析、执行重命名
-- **文件列表**：表格展示所有文件，支持排序、编辑、选择
-- **状态栏**：实时显示文件统计信息
+---
 
-## 🚀 快速开始
+## 功能特性
 
-### 前置要求
+### 🎯 核心能力
 
-- Node.js 24+
-- Rust 1.96+
-- pnpm 11+
-- Windows 操作系统
+- **AI 驱动识别** - 调用 OpenAI 兼容 API 批量生成建议文件名
+- **海量文件支持** - 虚拟列表，轻松处理数千到数万文件
+- **智能冲突处理** - 自动检测同名冲突，按文件大小生成清理方案
+- **安全可靠** - 两阶段重命名，删除文件移入系统回收站
+- **高效并发** - 可配置批次大小、并发数、超时与重试
 
-### 开发模式
+### ✨ 交互体验
+
+- 建议名称实时编辑与校验
+- 支持筛选、排序、搜索、全选与 Shift 区间选择
+- 结构化日志，可查看每次请求/响应详情
+- 右键菜单快捷操作
+- 支持多实例，同时处理不同目录
+
+## 快速开始
+
+### 安装
+
+**使用发布包**
+
+从 [GitHub Releases](https://github.com/zseek/nnamer/releases) 下载最新版本：
+
+- **Windows 便携版** - `Nnamer_x.x.x_x64.exe`（单文件，无需安装）
+- **Windows 安装包** - `Nnamer_x.x.x_x64-setup.exe`（NSIS 安装程序）或 `.msi` 文件
+
+> 当前主要在 Windows 上构建和验证。macOS / Linux 代码具备跨平台基础，需在对应系统自行构建与测试。
+
+**从源码构建**
 
 ```bash
+# 克隆仓库
+git clone https://github.com/zseek/nnamer.git
+cd nnamer
+
 # 安装依赖
 pnpm install
 
-# 启动开发服务器
+# 开发模式运行
 pnpm tauri dev
+
+# 构建发布版
+pnpm build
 ```
 
-### 构建发布版本
+## 使用指南
 
-```bash
-pnpm tauri build
-```
-
-生成的安装包位于 `src-tauri/target/release/bundle/`
-
-## 📖 使用指南
+### 基本流程
 
 1. **配置 API**
-   - 点击工具栏的"设置"按钮
-   - 填写 OpenAI 兼容的 API 端点（如 `https://api.openai.com/v1`）
-   - 填写 API Key
-   - 选择模型（如 `gpt-4o-mini`、`claude-3-5-sonnet` 等）
-   - 可自定义系统提示词
-
+  打开「设置」，填写 OpenAI 兼容 API 的 Base URL、API Key、模型名称，以及批次大小、并发数、超时时间、重试次数和系统提示词。
 2. **选择目录**
-   - 点击"选择目录"按钮
-   - 选择包含 TXT 文件的文件夹
-   - 查看扫描到的文件列表
-
+  点击「选择目录」，扫描该目录下的 `.txt` 文件（仅当前层，不递归）。
 3. **分析文件**
-   - 勾选文件后点击“分析已选”，批量调用 LLM 识别书名
-   - 可在设置中调整每批文件数、失败重试次数和并发请求数
-   - 可通过普通点击增量多选；先点击一个文件，再按住 Shift 点击另一个文件可选中当前列表顺序中的整个区间
-   - 长时间任务可随时暂停；已发送的请求会完成回填，恢复后继续剩余批次
-   - 每批响应完成后会立即显示建议文件名和最新状态
-   - 可手动编辑任意建议文件名
-
+  勾选需要处理的文件，点击「分析已选」。分析过程中可随时暂停；返回后可编辑建议名称。
 4. **处理冲突**
-   - 如果有冲突文件（多个文件建议相同名称）
-   - 点击"保留最大文件"自动处理
-   - 较小的文件将被移入回收站
-
+  多个文件建议名相同时会标记为冲突。点击「清理冲突」，保留每组最大的文件，其余移入回收站。
 5. **执行重命名**
-   - 勾选状态为“可执行”的文件
-   - 点击“执行重命名”
-   - 成功文件会保留为“已重命名”，继续参与后续冲突检测
+  勾选状态为「可执行」的文件，确认后执行重命名。成功项会标记为「已重命名」。
 
-## 🏗️ 技术栈
+### 文件状态说明
 
-### 前端
-- **React 19** - UI 框架
-- **TypeScript 5.8** - 类型安全
-- **Vite 7** - 构建工具
-- **Tailwind CSS 4** - 样式系统
-- **Zustand 5** - 状态管理
 
-### 桌面框架
-- **Tauri 2** - 跨平台桌面应用框架
+| 状态   | 说明              |
+| ---- | --------------- |
+| 待分析  | 尚未分析            |
+| 分析中  | 正在请求 LLM        |
+| 可执行  | 建议有效、与当前名不同且无冲突 |
+| 无需修改 | 建议名与当前文件名一致     |
+| 已重命名 | 已成功改名           |
+| 冲突   | 多个文件使用相同建议名     |
+| 失败   | 网络、解析、校验或文件操作失败 |
 
-### 后端 (Rust)
-- **reqwest** - HTTP 客户端，调用 LLM API
-- **serde_json** - JSON 序列化
-- **trash** - 回收站操作
-- **uuid** - 文件 ID 生成
 
-## 📂 项目结构
+## 开发
 
+### 常用命令
+
+```bash
+pnpm install    # 安装依赖
+pnpm tauri dev  # 开发运行
+pnpm test       # 前端测试
+pnpm build      # 构建发布版
 ```
+
+### 项目结构
+
+```text
 Nnamer/
-├── src/                      # React 前端代码
-│   ├── App.tsx               # 主应用组件
-│   ├── Toolbar.tsx           # 工具栏组件
-│   ├── FileList.tsx          # 文件列表组件
-│   ├── StatusBar.tsx         # 状态栏组件
-│   ├── SettingsDialog.tsx    # 设置对话框组件
-│   ├── store/                # Zustand 状态管理
-│   └── shared/               # 共享代码
-│       ├── lib/api.ts        # Tauri API 调用
-│       ├── lib/fileUtils.ts  # 文件工具函数
-│       └── types.ts          # TypeScript 类型定义
-├── src-tauri/                # Rust 后端代码
+├── src/                          # React 前端
+│   ├── Toolbar.tsx               # 工具栏（目录/分析/重命名）
+│   ├── FileList.tsx              # 虚拟化文件列表
+│   ├── SettingsDialog.tsx        # 设置对话框
+│   ├── Logger.tsx                # 分析日志查看器
+│   ├── DesktopInteractionLayer.tsx # 快捷键与右键菜单
+│   ├── store/                    # Zustand 状态管理
+│   └── shared/                   # 类型、API、工具函数与测试
+├── src-tauri/                    # Rust 后端
 │   └── src/
-│       ├── main.rs           # 主入口
-│       ├── lib.rs            # 库入口
-│       ├── files.rs          # 文件操作（扫描、重命名、回收站）
-│       ├── llm.rs            # LLM 客户端（API 调用、JSON 解析）
-│       ├── naming.rs         # 名称标准化和验证
-│       ├── settings.rs       # 设置管理（保存/加载配置）
-│       └── error.rs          # 错误类型定义
-├── LLM_DESIGN.md             # LLM 输入输出设计文档
-├── DEVELOPMENT.md            # 开发总结文档
-└── README.md                 # 本文件
+│       ├── files.rs              # 文件扫描、重命名、回收站
+│       ├── llm.rs                # LLM 请求与响应解析
+│       ├── naming.rs             # 文件名规范化与校验
+│       ├── settings.rs           # 配置读写
+│       └── logger.rs             # 分析请求日志事件
+├── package.json
+├── LICENSE
+└── README.md
 ```
 
-## ⚙️ 核心设计
+### 技术栈
 
-### 文件状态机
+**桌面框架**
 
-```
-pending → analyzing → ready / unchanged / conflict / failed
-ready → renamed
-renamed ↔ conflict
-```
+- [Tauri 2](https://v2.tauri.app/) - 跨平台桌面应用框架
 
-- **pending**: 待分析
-- **analyzing**: 正在等待 LLM 响应
-- **ready**: 建议名称有效、与源名称不同且没有冲突，可以执行重命名
-- **unchanged**: 建议名称与源文件名一致，无需执行重命名
-- **renamed**: 文件已在磁盘上成功重命名，条目继续参与后续冲突检测
-- **conflict**: 多个文件使用了相同的建议名称，需要修改后才能执行
-- **failed**: API、解析或名称校验失败，详细原因保存在错误信息中
+**前端**
 
-用户修改建议文件名后，名称校验和冲突状态会立即重新计算。主列表支持按以上状态筛选。
+- [React 19](https://react.dev/) - UI 框架
+- [TypeScript](https://www.typescriptlang.org/) - 类型安全
+- [Vite 7](https://vitejs.dev/) - 构建工具
+- [Zustand](https://zustand-demo.pmnd.rs/) - 状态管理
+- [Tailwind CSS 4](https://tailwindcss.com/) - 样式
+- [@tanstack/react-virtual](https://tanstack.com/virtual) - 虚拟列表
 
-### 名称标准化
+**后端**
 
-- 去除 `.txt` 扩展名
-- 替换 Windows 非法字符（`< > : " / \ | ? *`）为全角字符
-- 去除首尾空白和尾随句点
-- 限制长度 180 字符
-- 检查保留设备名（`CON`、`PRN`、`AUX` 等）
+- [Rust](https://www.rust-lang.org/) - 系统编程语言
+- [reqwest](https://docs.rs/reqwest/) - HTTP 客户端
+- [serde](https://serde.rs/) - 序列化/反序列化
+- [trash](https://docs.rs/trash/) - 跨平台回收站
 
-### 冲突处理策略
+## 注意事项
 
-- 按 Windows 大小写不敏感规则分组
-- 同组内保留最大文件
-- 其余文件可移入回收站
-- 并列最大需手动处理
+- 仅扫描选定目录的第一层 `.txt` 文件，不递归子目录
+- 删除操作会将文件移入系统回收站（Windows 回收站 / macOS 废纸篓 / Linux Trash），可在系统中恢复
+- 再次启动程序会打开新实例，各实例工作区独立，但共享设置文件
+- 文件名规则采用跨平台兼容策略（替换非法字符、拒绝保留设备名），便于在不同系统间迁移
 
-### 安全重命名机制
+## 许可证
 
-- **两阶段改名**：
-  1. 源文件 → 临时文件（`~nnamer_temp_uuid.txt`）
-  2. 临时文件 → 目标文件
-- 支持名称交换（A→B 同时 B→A）
-- 防止循环占用
-- 元数据校验防止文件在重命名过程中被修改
-
-## 📝 许可证
-
-MIT
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## ⚠️ 注意事项
-
-- 仅支持 Windows 系统（回收站功能依赖 Windows API）
-- API Key 以明文形式保存在本机配置目录（`%APPDATA%\com.nnamer.app\settings.json`）
-- 需要联网访问 LLM API
-- 文件移入回收站后可通过系统回收站恢复，但程序内无法直接恢复
-- 仅扫描选定目录的第一层文件，不会递归扫描子目录
+本项目基于 [MIT License](LICENSE) 开源

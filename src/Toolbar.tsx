@@ -650,13 +650,14 @@ export default function Toolbar() {
     setIsRenaming(true);
 
     const operations = selectedExecutableFiles.map((file) => ({
-      sourcePath: `${currentDirectory}\\${file.originalName}`,
+      fileId: file.id,
+      originalName: file.originalName,
       targetName: file.normalizedName!,
     }));
 
     const metadataSnapshot = Object.fromEntries(
       selectedExecutableFiles.map((file) => [
-        file.originalName,
+        file.id,
         {
           sizeBytes: file.sizeBytes,
           modifiedAt: file.modifiedAt,
@@ -670,13 +671,13 @@ export default function Toolbar() {
         operations,
         metadataSnapshot
       );
-      const filesByOriginalName = new Map(
-        selectedExecutableFiles.map((file) => [file.originalName, file])
+      const filesById = new Map(
+        selectedExecutableFiles.map((file) => [file.id, file])
       );
       const successfulFileTargetById = new Map<string, string>();
 
       for (const result of results) {
-        const matchedFile = filesByOriginalName.get(result.fileId);
+        const matchedFile = filesById.get(result.fileId);
         if (result.success && matchedFile?.normalizedName) {
           successfulFileTargetById.set(matchedFile.id, matchedFile.normalizedName);
         }

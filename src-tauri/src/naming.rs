@@ -55,7 +55,9 @@ pub fn normalize_suggested_name(input: &str) -> NameValidation {
         .unwrap_or_default()
         .to_uppercase();
     if WINDOWS_RESERVED_NAMES.contains(&device_name_candidate.as_str()) {
-        return invalid_name("建议名称是 Windows 保留设备名");
+        return invalid_name(
+            "建议名称使用了保留设备名，为确保文件可在 Windows、macOS 和 Linux 之间迁移，请更换名称",
+        );
     }
 
     NameValidation {
@@ -117,6 +119,15 @@ mod tests {
         let result = normalize_suggested_name("CON.txt");
         assert!(result.normalized_name.is_none());
         assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn rejects_reserved_device_names_with_portable_message() {
+        let result = normalize_suggested_name("CON.txt");
+        assert_eq!(
+            result.error.as_deref(),
+            Some("建议名称使用了保留设备名，为确保文件可在 Windows、macOS 和 Linux 之间迁移，请更换名称")
+        );
     }
 
     #[test]

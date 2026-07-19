@@ -22,7 +22,8 @@ pub struct ScannedFile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenameOperation {
-    pub source_path: PathBuf,
+    pub file_id: String,
+    pub original_name: String,
     pub target_name: String,
 }
 
@@ -85,7 +86,7 @@ pub fn scan_directory(directory_path: String) -> AppResult<Vec<ScannedFile>> {
         let modified_at = metadata
             .modified()?
             .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
+            .map(|duration| duration.as_nanos() as u64)
             .unwrap_or(0);
 
         scanned_files.push(ScannedFile {
@@ -219,101 +220,102 @@ pub fn execute_rename_operations(
     }
 
     let mut results = Vec::new();
-    let mut staged_operations: Vec<(PathBuf, PathBuf, String)> = Vec::new();
+    let mut staged_operations: Vec<(String, PathBuf, PathBuf, String)> = Vec::new();
+    let mut target_names = std::collections::HashSet::new();
 
     for operation in &operations {
-        let source_path = &operation.source_path;
-        let file_id = source_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        if !source_path.exists() {
-            results.push(RenameResult {
-                file_id,
-                success: false,
-                error: Some("源文件不存在".to_string()),
-            });
-            continue;
-        }
-
-        if let Some(snapshot) = file_metadata_snapshot.get(&file_id) {
-            match verify_metadata_unchanged(source_path, snapshot) {
-                Ok(_) => {}
-                Err(error) => {
-                    results.push(RenameResult {
-                        file_id,
-                        success: false,
-                        error: Some(format!("文件元数据已变化：{}", error)),
-                    });
-                    continue;
-                }
+        let file_id = operation.file_id.clone();
+        let snapshot = match file_metadata_snapshot.get(&file_id) {
+            Some(snapshot) => snapshot,
+            None => {
+                results.push(RenameResult {
+                    file_id,
+                    success: false,
+                    error: Some("缺少文件元数据快照".to_string()),
+                });
+                continue;
             }
-        }
-
-        let validated_name = naming::normalize_suggested_name(&operation.target_name);
-        if validated_name.normalized_name.is_none() {
-            results.push(RenameResult {
-                file_id,
-                success: false,
-                error: validated_name.error,
-            });
-            continue;
-        }
-
-        let final_target_name = format!("{}.txt", validated_name.normalized_name.unwrap());
-        let target_path = directory.join(&final_target_name);
-
-        if target_path.exists() && target_path != *source_path {
-            results.push(RenameResult {
-                file_id,
-                success: false,
-                error: Some("目标文件名已被占用".to_string()),
-            });
-            continue;
-        }
-
-        let temp_name = format!("~nnamer_temp_{}.txt", Uuid::new_v4());
-        let temp_path = directory.join(temp_name);
-
-        staged_operations.push((source_path.clone(), temp_path, final_target_name));
-    }
-
-    for (source_path, temp_path, final_target_name) in staged_operations {
-        let file_id = source_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        match fs::rename(&source_path, &temp_path) {
-            Ok(_) => {}
+        };
+        let validated_candidate = match validate_file_candidate(
+            directory,
+            &operation.file_id,
+            &operation.original_name,
+            snapshot.size_bytes,
+            snapshot.modified_at,
+        ) {
+            Ok(candidate) => candidate,
             Err(error) => {
                 results.push(RenameResult {
                     file_id,
                     success: false,
-                    error: Some(format!("阶段一改名失败：{}", error)),
+                    error: Some(error.to_string()),
                 });
                 continue;
             }
+        };
+        let source_path = validated_candidate.file_path;
+
+        let validated_name = naming::normalize_suggested_name(&operation.target_name);
+        let normalized_name = match validated_name.normalized_name {
+            Some(name) => name,
+            None => {
+                results.push(RenameResult {
+                    file_id,
+                    success: false,
+                    error: validated_name.error,
+                });
+                continue;
+            }
+        };
+
+        let final_target_name = format!("{normalized_name}.txt");
+        let target_path = directory.join(&final_target_name);
+        let target_is_source = target_path.exists()
+            && fs::canonicalize(&target_path).ok() == fs::canonicalize(&source_path).ok();
+        if !target_names.insert(final_target_name.clone())
+            || (target_path.exists() && !target_is_source)
+        {
+            results.push(RenameResult {
+                file_id,
+                success: false,
+                error: Some("目标文件名已被占用或与其他待处理文件重复".to_string()),
+            });
+            continue;
+        }
+
+        let temp_path = directory.join(format!("~nnamer_temp_{}.txt", Uuid::new_v4()));
+        staged_operations.push((file_id, source_path, temp_path, final_target_name));
+    }
+
+    for (file_id, source_path, temp_path, final_target_name) in staged_operations {
+        if let Err(error) = fs::rename(&source_path, &temp_path) {
+            results.push(RenameResult {
+                file_id,
+                success: false,
+                error: Some(format!("阶段一改名失败：{error}")),
+            });
+            continue;
         }
 
         let final_target_path = directory.join(final_target_name);
         match fs::rename(&temp_path, &final_target_path) {
-            Ok(_) => {
-                results.push(RenameResult {
-                    file_id,
-                    success: true,
-                    error: None,
-                });
-            }
+            Ok(_) => results.push(RenameResult {
+                file_id,
+                success: true,
+                error: None,
+            }),
             Err(error) => {
-                let _ = fs::rename(&temp_path, &source_path);
+                let rollback_error = fs::rename(&temp_path, &source_path).err();
+                let error_message = match rollback_error {
+                    Some(rollback_error) => {
+                        format!("阶段二改名失败：{error}；恢复原文件名也失败：{rollback_error}")
+                    }
+                    None => format!("阶段二改名失败：{error}"),
+                };
                 results.push(RenameResult {
                     file_id,
                     success: false,
-                    error: Some(format!("阶段二改名失败：{}", error)),
+                    error: Some(error_message),
                 });
             }
         }
@@ -335,7 +337,7 @@ fn verify_metadata_unchanged(file_path: &Path, snapshot: &FileMetadataSnapshot) 
     let current_modified = metadata
         .modified()?
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
+        .map(|duration| duration.as_nanos() as u64)
         .unwrap_or(0);
 
     if current_size != snapshot.size_bytes {
@@ -367,7 +369,7 @@ mod tests {
             .unwrap()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
-            .as_secs();
+            .as_nanos() as u64;
         let valid_operation = RecycleBinOperation {
             file_id: "file-600".to_string(),
             original_name: "连载小说（600）.txt".to_string(),
@@ -400,7 +402,8 @@ mod tests {
     #[test]
     fn creates_two_stage_rename_plan() {
         let operations = vec![RenameOperation {
-            source_path: PathBuf::from("test.txt"),
+            file_id: "file-001".to_string(),
+            original_name: "test.txt".to_string(),
             target_name: "诡秘之主".to_string(),
         }];
         assert_eq!(operations.len(), 1);

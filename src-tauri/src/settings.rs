@@ -74,19 +74,13 @@ impl AppSettings {
             return Err(AppError::Validation("模型名称不能为空".to_string()));
         }
         if self.batch_size == 0 {
-            return Err(AppError::Validation(
-                "每批文件数必须大于 0".to_string(),
-            ));
+            return Err(AppError::Validation("每批文件数必须大于 0".to_string()));
         }
         if self.timeout_seconds == 0 {
-            return Err(AppError::Validation(
-                "请求超时必须大于 0 秒".to_string(),
-            ));
+            return Err(AppError::Validation("请求超时必须大于 0 秒".to_string()));
         }
         if self.concurrency == 0 {
-            return Err(AppError::Validation(
-                "并发数必须大于 0".to_string(),
-            ));
+            return Err(AppError::Validation("并发数必须大于 0".to_string()));
         }
         if self.prompt.trim().is_empty() {
             return Err(AppError::Validation("Prompt 不能为空".to_string()));

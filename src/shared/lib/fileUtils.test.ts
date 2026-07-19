@@ -46,7 +46,7 @@ describe('validateSuggestedName', () => {
   it('rejects empty and reserved Windows names', () => {
     expect(validateSuggestedName('  ').error).toBe('建议名称不能为空');
     expect(validateSuggestedName('CON.txt').error).toBe(
-      '建议名称是 Windows 保留设备名'
+      '建议名称使用了保留设备名，为确保文件可在 Windows、macOS 和 Linux 之间迁移，请更换名称'
     );
   });
 });

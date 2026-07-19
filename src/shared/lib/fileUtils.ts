@@ -56,7 +56,9 @@ export function validateSuggestedName(input: string): SuggestedNameValidation {
 
   const deviceNameCandidate = normalizedName.split('.')[0].toUpperCase();
   if (WINDOWS_RESERVED_NAMES.has(deviceNameCandidate)) {
-    return { error: '建议名称是 Windows 保留设备名' };
+    return {
+      error: '建议名称使用了保留设备名，为确保文件可在 Windows、macOS 和 Linux 之间迁移，请更换名称',
+    };
   }
 
   return { normalizedName };

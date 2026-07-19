@@ -36,83 +36,70 @@
 ]
 ```
 
-### 文件列表格式
+### 消息结构
+
+系统提示词与每批文件数据分成两条 message，不能拼接成一个字符串：
 
 ```rust
-fn build_batch_prompt(user_rules: &str, requests: &[AnalysisRequest]) -> String {
-    let file_list = requests
+fn build_batch_messages(
+    system_prompt: &str,
+    requests: &[AnalysisRequest],
+) -> AppResult<Vec<ChatMessage>> {
+    let file_inputs = requests
         .iter()
-        .map(|request| format!("- ID: {}\n  文件名: {}", request.file_id, request.original_stem))
-        .collect::<Vec<_>>()
-        .join("\n");
+        .map(|request| FilePromptInput {
+            id: request.file_id.clone(),
+            filename: naming::strip_txt_extension(&request.original_stem),
+        })
+        .collect::<Vec<_>>();
+    let file_inputs_json = serde_json::to_string_pretty(&file_inputs)?;
 
-    format!(
-        r#"{}
-
-以下是需要分析的文件名：
-
-{}
-
-请返回 JSON 数组，每项包含 "id" 和 "suggested_name" 字段。id 必须与输入完全对应，suggested_name 为识别出的小说书名（不含 .txt 扩展名）。必须包含所有文件，不得遗漏。
-
-示例格式：
-[
-  {{"id": "file-0001", "suggested_name": "诡秘之主"}},
-  {{"id": "file-0002", "suggested_name": "斗破苍穹"}}
-]
-
-只返回 JSON 数组，不要其他内容。"#,
-        user_rules, file_list
-    )
+    Ok(vec![
+        ChatMessage {
+            role: "system",
+            content: system_prompt.to_string(),
+        },
+        ChatMessage {
+            role: "user",
+            content: file_inputs_json,
+        },
+    ])
 }
 ```
 
-### 实际发送的完整 Prompt 示例
+实际请求体的 `messages` 字段结构如下：
 
+```json
+[
+  {
+    "role": "system",
+    "content": "这里是设置中保存的提示词，原样发送，不追加任何内容"
+  },
+  {
+    "role": "user",
+    "content": "这里是当前批次的文件 JSON 数组"
+  }
+]
 ```
-你是一个专业的文件名识别工具。你的任务是从混乱的文件名中提取出正确的小说书名。
 
-**处理规则：**
-1. 去除所有无关信息：作者名、网站名、下载来源、完结标记、章节范围、更新日期、括号内广告
-2. 提取核心书名：只保留小说的正式名称
-3. 不要臆造：如果无法确定书名，返回原文件名
+第一条 message 在所有批次之间保持不变，第二条 message 只包含当前批次数据。这样可以让模型服务更容易复用稳定前缀缓存，也避免文件数据破坏提示词结构。
 
-**输出格式要求：**
-必须严格返回 JSON 数组格式，每个对象包含两个字段：
-- "id": 文件的唯一标识符（与输入完全一致）
-- "suggested_name": 识别出的书名（纯文本，不含扩展名）
+文件 JSON 只负责承载输入数据，不在其中追加输出格式说明或其他行为指令：
 
-**输入输出示例：**
-输入格式：
+```json
 [
-  {"id": "b8c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e", "filename": "[笔趣阁]诡秘之主(全本)作者爱潜水的乌贼"},
-  {"id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "filename": "斗破苍穹-天蚕土豆【完结】"}
+  {
+    "id": "file-00001",
+    "filename": "[笔趣阁]诡秘之主(全本)作者爱潜水的乌贼"
+  },
+  {
+    "id": "file-00002",
+    "filename": "斗破苍穹-天蚕土豆【完结】"
+  }
 ]
-输出格式：
-[
-  {"id": "b8c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e", "suggested_name": "诡秘之主"},
-  {"id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "suggested_name": "斗破苍穹"}
-]
-
-以下是需要分析的文件名：
-
-- ID: file-00001
-  文件名: [笔趣阁]诡秘之主(全本)作者爱潜水的乌贼
-- ID: file-00002
-  文件名: 斗破苍穹-天蚕土豆【完结】
-- ID: file-00003
-  文件名: 遮天(辰东)更新至2024-01-15
-
-请返回 JSON 数组，每项包含 "id" 和 "suggested_name" 字段。id 必须与输入完全对应，suggested_name 为识别出的小说书名（不含 .txt 扩展名）。必须包含所有文件，不得遗漏。
-
-示例格式：
-[
-  {"id": "file-0001", "suggested_name": "诡秘之主"},
-  {"id": "file-0002", "suggested_name": "斗破苍穹"}
-]
-
-只返回 JSON 数组，不要其他内容。
 ```
+
+应用不会在用户提示词后面自动追加“请返回 JSON 数组”等内容。输出约束应由用户在设置中的提示词自行定义，默认提示词已经包含这部分规则。
 
 ## 📤 输出设计
 
@@ -264,14 +251,19 @@ pub fn normalize_suggested_name(suggested_name: &str) -> ValidationResult {
 3. 前端发起批量分析请求
    批次大小和同时执行的批次数量均可配置
    ↓
-4. Rust 后端构建完整 Prompt
-   = 系统提示词 + 文件列表 + 格式要求
+4. Rust 后端构造两条独立 message
+   - 第一条：设置中的系统提示词，原样发送
+   - 第二条：当前批次的文件 JSON 数组
+   - 不拼接额外输出要求
    ↓
 5. 调用 OpenAI API
    POST /v1/chat/completions
    {
      "model": "gpt-4o-mini",
-     "messages": [{"role": "user", "content": "..."}],
+     "messages": [
+       {"role": "system", "content": "用户设置的提示词"},
+       {"role": "user", "content": "当前批次文件 JSON"}
+     ],
      "temperature": 0.3
    }
    ↓

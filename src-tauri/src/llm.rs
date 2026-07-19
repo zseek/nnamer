@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use tauri::AppHandle;
 
 use crate::error::{AppError, AppResult};
+use crate::logger;
 use crate::naming;
 use crate::settings::AppSettings;
 
@@ -34,20 +35,26 @@ pub struct BatchAnalysisResult {
     pub raw_response: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct ChatMessage {
+    role: &'static str,
+    content: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FilePromptInput {
+    id: String,
+    filename: String,
+}
+
 #[tauri::command]
 pub async fn analyze_batch(
     app_handle: AppHandle,
     settings: AppSettings,
+    session_id: String,
     batch_index: usize,
     requests: Vec<AnalysisRequest>,
 ) -> AppResult<BatchAnalysisResult> {
-    use crate::logger;
-
-    logger::log_info(
-        &app_handle,
-        format!("开始分析批次 {} ({} 个文件)", batch_index, requests.len()),
-    );
-
     settings.validate()?;
 
     if requests.is_empty() {
@@ -58,35 +65,28 @@ pub async fn analyze_batch(
         .timeout(Duration::from_secs(settings.timeout_seconds))
         .build()?;
 
-    let user_prompt = build_batch_prompt(&settings.prompt, &requests);
+    let messages = build_batch_messages(&settings.prompt, &requests)?;
     let chat_completion_url = format!(
         "{}/chat/completions",
         settings.base_url.trim_end_matches('/')
     );
 
-    logger::log_debug(&app_handle, format!("API 端点: {}", chat_completion_url));
-
     let request_body = json!({
         "model": settings.model,
-        "messages": [
-            {
-                "role": "user",
-                "content": user_prompt
-            }
-        ],
+        "messages": messages,
         "temperature": 0.3,
     });
+    let request_body_text = serde_json::to_string_pretty(&request_body)?;
 
     let mut last_error = None;
-    for attempt in 0..=settings.max_retries {
-        if attempt > 0 {
-            logger::log_warn(
-                &app_handle,
-                format!("批次 {} 重试第 {} 次", batch_index, attempt),
-            );
-            tokio::time::sleep(Duration::from_millis(500 * attempt as u64)).await;
+    for attempt_index in 0..=settings.max_retries {
+        if attempt_index > 0 {
+            tokio::time::sleep(Duration::from_millis(500 * attempt_index as u64)).await;
         }
 
+        let attempt_number = attempt_index + 1;
+        let will_retry = attempt_index < settings.max_retries;
+        let request_started_at = Instant::now();
         let response = client
             .post(&chat_completion_url)
             .header("Content-Type", "application/json")
@@ -97,84 +97,161 @@ pub async fn analyze_batch(
 
         match response {
             Ok(http_response) => {
-                let status = http_response.status();
-                let response_text = http_response.text().await?;
+                let response_status = http_response.status();
+                let response_text_result = http_response.text().await;
+                let request_duration_milliseconds = request_started_at.elapsed().as_millis() as u64;
 
-                if !status.is_success() {
-                    let error_msg = format!("HTTP {}: {}", status, response_text);
-                    logger::log_error(
+                let response_text = match response_text_result {
+                    Ok(response_text) => response_text,
+                    Err(error) => {
+                        let error_message = format!("读取响应正文失败：{}", error);
+                        logger::emit_analysis_attempt(
+                            &app_handle,
+                            logger::AnalysisAttemptLog {
+                                session_id: session_id.clone(),
+                                timestamp: logger::current_timestamp_milliseconds(),
+                                batch_index,
+                                attempt: attempt_number,
+                                status: "network_error".to_string(),
+                                request_url: chat_completion_url.clone(),
+                                request_body: request_body_text.clone(),
+                                response_status: Some(response_status.as_u16()),
+                                response_body: None,
+                                duration_ms: request_duration_milliseconds,
+                                error: Some(error_message.clone()),
+                                will_retry,
+                            },
+                        );
+                        last_error = Some(error_message);
+                        continue;
+                    }
+                };
+
+                if !response_status.is_success() {
+                    let error_message = format!("HTTP {}: {}", response_status, response_text);
+                    logger::emit_analysis_attempt(
                         &app_handle,
-                        format!("批次 {} API 错误: {}", batch_index, error_msg),
+                        logger::AnalysisAttemptLog {
+                            session_id: session_id.clone(),
+                            timestamp: logger::current_timestamp_milliseconds(),
+                            batch_index,
+                            attempt: attempt_number,
+                            status: "http_error".to_string(),
+                            request_url: chat_completion_url.clone(),
+                            request_body: request_body_text.clone(),
+                            response_status: Some(response_status.as_u16()),
+                            response_body: Some(response_text),
+                            duration_ms: request_duration_milliseconds,
+                            error: Some(error_message.clone()),
+                            will_retry,
+                        },
                     );
-                    last_error = Some(error_msg);
+                    last_error = Some(error_message);
                     continue;
                 }
 
-                logger::log_info(
-                    &app_handle,
-                    format!("批次 {} 分析成功，开始解析响应", batch_index),
-                );
-                let result = parse_completion_response(batch_index, &requests, &response_text);
-
-                match &result {
-                    Ok(_) => logger::log_info(&app_handle, format!("批次 {} 完成", batch_index)),
-                    Err(e) => logger::log_error(
-                        &app_handle,
-                        format!("批次 {} 解析失败: {}", batch_index, e),
-                    ),
+                let parse_result =
+                    parse_completion_response(batch_index, &requests, &response_text);
+                match parse_result {
+                    Ok(batch_result) => {
+                        logger::emit_analysis_attempt(
+                            &app_handle,
+                            logger::AnalysisAttemptLog {
+                                session_id: session_id.clone(),
+                                timestamp: logger::current_timestamp_milliseconds(),
+                                batch_index,
+                                attempt: attempt_number,
+                                status: "success".to_string(),
+                                request_url: chat_completion_url.clone(),
+                                request_body: request_body_text.clone(),
+                                response_status: Some(response_status.as_u16()),
+                                response_body: Some(response_text),
+                                duration_ms: request_duration_milliseconds,
+                                error: None,
+                                will_retry: false,
+                            },
+                        );
+                        return Ok(batch_result);
+                    }
+                    Err(parse_error) => {
+                        let error_message = parse_error.to_string();
+                        logger::emit_analysis_attempt(
+                            &app_handle,
+                            logger::AnalysisAttemptLog {
+                                session_id: session_id.clone(),
+                                timestamp: logger::current_timestamp_milliseconds(),
+                                batch_index,
+                                attempt: attempt_number,
+                                status: "parse_error".to_string(),
+                                request_url: chat_completion_url.clone(),
+                                request_body: request_body_text.clone(),
+                                response_status: Some(response_status.as_u16()),
+                                response_body: Some(response_text),
+                                duration_ms: request_duration_milliseconds,
+                                error: Some(error_message),
+                                will_retry: false,
+                            },
+                        );
+                        return Err(parse_error);
+                    }
                 }
-
-                return result;
             }
             Err(error) => {
-                let error_msg = format!("请求失败：{}", error);
-                logger::log_error(
+                let request_duration_milliseconds = request_started_at.elapsed().as_millis() as u64;
+                let error_message = format!("请求失败：{}", error);
+                logger::emit_analysis_attempt(
                     &app_handle,
-                    format!("批次 {} 网络错误: {}", batch_index, error_msg),
+                    logger::AnalysisAttemptLog {
+                        session_id: session_id.clone(),
+                        timestamp: logger::current_timestamp_milliseconds(),
+                        batch_index,
+                        attempt: attempt_number,
+                        status: "network_error".to_string(),
+                        request_url: chat_completion_url.clone(),
+                        request_body: request_body_text.clone(),
+                        response_status: None,
+                        response_body: None,
+                        duration_ms: request_duration_milliseconds,
+                        error: Some(error_message.clone()),
+                        will_retry,
+                    },
                 );
-                last_error = Some(error_msg);
+                last_error = Some(error_message);
             }
         }
     }
 
-    let final_error = format!(
+    Err(AppError::Llm(format!(
         "批次 {} 重试 {} 次后仍然失败：{}",
         batch_index,
         settings.max_retries,
         last_error.unwrap_or_else(|| "未知错误".to_string())
-    );
-    logger::log_error(&app_handle, &final_error);
-    Err(AppError::Llm(final_error))
+    )))
 }
 
-fn build_batch_prompt(user_rules: &str, requests: &[AnalysisRequest]) -> String {
-    let files_json = requests
+fn build_batch_messages(
+    system_prompt: &str,
+    requests: &[AnalysisRequest],
+) -> AppResult<Vec<ChatMessage>> {
+    let file_inputs = requests
         .iter()
-        .map(|request| {
-            let extensionless_filename = naming::strip_txt_extension(&request.original_stem);
-            format!(
-                r#"{{"id": "{}", "filename": "{}"}}"#,
-                request.file_id.replace('"', r#"\""#),
-                extensionless_filename.replace('"', r#"\""#)
-            )
+        .map(|request| FilePromptInput {
+            id: request.file_id.clone(),
+            filename: naming::strip_txt_extension(&request.original_stem),
         })
-        .collect::<Vec<_>>()
-        .join(",\n  ");
+        .collect::<Vec<_>>();
+    let file_inputs_json = serde_json::to_string_pretty(&file_inputs)?;
 
-    format!(
-        r#"{}
-
-以下是需要分析的文件名（JSON 格式）：
-
-[
-  {}
-]
-
-请返回 JSON 数组，每项包含 "id" 和 "suggested_name" 字段。id 必须与输入完全对应，suggested_name 为识别出的小说书名（不含 .txt 扩展名）。必须包含所有文件，不得遗漏。
-
-只返回 JSON 数组，不要其他内容。"#,
-        user_rules, files_json
-    )
+    Ok(vec![
+        ChatMessage {
+            role: "system",
+            content: system_prompt.to_string(),
+        },
+        ChatMessage {
+            role: "user",
+            content: file_inputs_json,
+        },
+    ])
 }
 
 fn parse_completion_response(
@@ -254,15 +331,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builds_batch_prompt_without_filename_extensions() {
-        let requests = vec![AnalysisRequest {
-            file_id: "file-001".to_string(),
-            original_stem: "诡秘之主(全本).TXT".to_string(),
-        }];
-        let prompt = build_batch_prompt("识别书名", &requests);
-        assert!(prompt.contains("file-001"));
-        assert!(prompt.contains(r#""filename": "诡秘之主(全本)""#));
-        assert!(!prompt.contains(r#""filename": "诡秘之主(全本).TXT""#));
+    fn builds_separate_system_prompt_and_file_json_messages() {
+        let system_prompt = "只使用这段用户配置的提示词。\n不要追加其他内容。";
+        let requests = vec![
+            AnalysisRequest {
+                file_id: "file-001".to_string(),
+                original_stem: "诡秘之主(全本).TXT".to_string(),
+            },
+            AnalysisRequest {
+                file_id: "file-002".to_string(),
+                original_stem: "带\"引号\"的书名".to_string(),
+            },
+        ];
+
+        let messages = build_batch_messages(system_prompt, &requests).unwrap();
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "system");
+        assert_eq!(messages[0].content, system_prompt);
+        assert_eq!(messages[1].role, "user");
+
+        let file_inputs: Value = serde_json::from_str(&messages[1].content).unwrap();
+        assert_eq!(
+            file_inputs,
+            json!([
+                {"id": "file-001", "filename": "诡秘之主(全本)"},
+                {"id": "file-002", "filename": "带\"引号\"的书名"}
+            ])
+        );
     }
 
     #[test]

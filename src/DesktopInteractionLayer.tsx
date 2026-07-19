@@ -60,7 +60,7 @@ function hasOpenModalDialog(): boolean {
 function isBlockedApplicationShortcut(event: KeyboardEvent): boolean {
   const hasPrimaryModifier = event.ctrlKey || event.metaKey;
 
-  if (event.key === 'F5') {
+  if (event.key === 'F5' || event.key === 'F12' || event.code === 'F12') {
     return true;
   }
 

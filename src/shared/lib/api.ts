@@ -22,11 +22,13 @@ export async function scanDirectory(directoryPath: string): Promise<ScannedFile[
 
 export async function analyzeBatch(
   settings: AppSettings,
+  sessionId: string,
   batchIndex: number,
   requests: Array<{ fileId: string; originalStem: string }>
 ): Promise<BatchAnalysisResult> {
   return await invoke<BatchAnalysisResult>('analyze_batch', {
     settings,
+    sessionId,
     batchIndex,
     requests,
   });

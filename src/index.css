@@ -266,6 +266,722 @@
   }
 }
 
+.logger-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: hsl(220 20% 10% / 0.48);
+  animation: operation-backdrop-enter 160ms ease-out;
+}
+
+.logger-modal-dialog {
+  width: min(1080px, calc(100vw - 40px));
+  height: min(720px, calc(100vh - 40px));
+  min-height: 420px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid hsl(var(--color-border));
+  border-radius: 7px;
+  background: hsl(var(--color-surface));
+  box-shadow: 0 18px 48px hsl(220 30% 10% / 0.24);
+  animation: operation-dialog-enter 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.logger-modal-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 15px 18px 14px;
+  border-bottom: 1px solid hsl(var(--color-border));
+  background: hsl(var(--color-surface));
+}
+
+.logger-modal-header h2 {
+  color: hsl(var(--color-text));
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.logger-modal-header p {
+  margin-top: 3px;
+  color: hsl(var(--color-text-secondary));
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.logger-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.logger-count {
+  color: hsl(var(--color-text-secondary));
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.logger-modal-content {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(420px, 1.35fr);
+  background: hsl(var(--color-background) / 0.42);
+}
+
+.logger-entry-list {
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+  border-right: 1px solid hsl(var(--color-border));
+  background: hsl(var(--color-surface));
+}
+
+.logger-entry {
+  width: 100%;
+  display: block;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: hsl(var(--color-text));
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.logger-entry + .logger-entry {
+  margin-top: 3px;
+}
+
+.logger-entry:hover {
+  background: hsl(var(--color-background));
+}
+
+.logger-entry.is-selected {
+  border-color: hsl(var(--color-primary) / 0.32);
+  background: hsl(var(--color-primary) / 0.08);
+}
+
+.logger-entry:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid hsl(var(--color-primary));
+  outline-offset: -2px;
+}
+
+.logger-entry-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.logger-entry-time,
+.logger-detail-time {
+  color: hsl(var(--color-text-secondary));
+  font-family: Consolas, "Courier New", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.logger-entry-message {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  color: hsl(var(--color-text));
+  font-size: 11px;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logger-level {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.logger-level-info {
+  color: hsl(var(--color-primary-hover));
+}
+
+.logger-level-warn {
+  color: hsl(32 82% 31%);
+}
+
+.logger-level-error {
+  color: hsl(0 64% 40%);
+}
+
+.logger-level-debug {
+  color: hsl(var(--color-text-secondary));
+}
+
+.logger-entry-batch,
+.logger-entry-status,
+.logger-entry-detail-mark {
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: hsl(var(--color-background));
+  color: hsl(var(--color-text-secondary));
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.logger-entry-status.is-error {
+  background: hsl(var(--color-error) / 0.1);
+  color: hsl(0 64% 40%);
+}
+
+.logger-entry-detail-mark {
+  background: hsl(var(--color-primary) / 0.1);
+  color: hsl(var(--color-primary-hover));
+}
+
+.logger-empty-state,
+.logger-detail-empty {
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 24px;
+  color: hsl(var(--color-text-secondary));
+  text-align: center;
+}
+
+.logger-empty-state strong,
+.logger-detail-empty strong {
+  color: hsl(var(--color-text));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.logger-empty-state span,
+.logger-detail-empty span {
+  font-size: 11px;
+}
+
+.logger-detail-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 18px;
+  background: hsl(var(--color-background) / 0.42);
+}
+
+.logger-detail-panel > .logger-detail-empty {
+  height: 100%;
+}
+
+.logger-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid hsl(var(--color-border));
+}
+
+.logger-detail-header h3 {
+  max-width: 560px;
+  margin-top: 4px;
+  color: hsl(var(--color-text));
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 19px;
+}
+
+.logger-detail-time {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.logger-metadata-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 0;
+}
+
+.logger-metadata-grid > div {
+  min-width: 94px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px;
+  border: 1px solid hsl(var(--color-border));
+  border-radius: 4px;
+  background: hsl(var(--color-surface));
+}
+
+.logger-metadata-grid span,
+.logger-url-row > span {
+  color: hsl(var(--color-text-secondary));
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.logger-metadata-grid strong {
+  color: hsl(var(--color-text));
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+}
+
+.logger-metadata-grid strong.is-success {
+  color: hsl(142 64% 32%);
+}
+
+.logger-metadata-grid strong.is-error {
+  color: hsl(0 64% 40%);
+}
+
+.logger-url-row {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid hsl(var(--color-border));
+  border-radius: 4px;
+  background: hsl(var(--color-surface));
+}
+
+.logger-url-row code {
+  min-width: 0;
+  overflow: hidden;
+  color: hsl(var(--color-text));
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logger-payload-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.logger-payload {
+  overflow: hidden;
+  border: 1px solid hsl(var(--color-border));
+  border-radius: 5px;
+  background: hsl(var(--color-surface));
+}
+
+.logger-payload summary {
+  padding: 8px 10px;
+  color: hsl(var(--color-text));
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.logger-payload summary:hover {
+  background: hsl(var(--color-background));
+}
+
+.logger-payload pre {
+  max-height: 280px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border-top: 1px solid hsl(var(--color-border));
+  background: hsl(var(--color-background) / 0.7);
+  color: hsl(var(--color-text));
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 10px;
+  line-height: 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.logger-no-payload {
+  padding: 14px;
+  color: hsl(var(--color-text-secondary));
+  font-size: 11px;
+}
+
+.logger-entry-summary {
+  display: block;
+  margin-top: 2px;
+  color: hsl(var(--color-text-secondary));
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+}
+
+.logger-status {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: hsl(var(--color-background));
+  color: hsl(var(--color-text-secondary));
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.logger-status.is-success {
+  background: hsl(142 56% 40% / 0.1);
+  color: hsl(142 64% 30%);
+}
+
+.logger-status.is-running {
+  background: hsl(var(--color-primary) / 0.1);
+  color: hsl(var(--color-primary-hover));
+}
+
+.logger-status.is-warning {
+  background: hsl(34 82% 45% / 0.12);
+  color: hsl(32 82% 31%);
+}
+
+.logger-status.is-error {
+  background: hsl(var(--color-error) / 0.1);
+  color: hsl(0 64% 40%);
+}
+
+.logger-status.is-muted {
+  color: hsl(var(--color-text-secondary));
+}
+
+.logger-batch-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 2px;
+  padding: 10px 0 8px;
+  border-top: 1px solid hsl(var(--color-border));
+}
+
+.logger-batch-toolbar > strong,
+.logger-attempt-header strong {
+  color: hsl(var(--color-text));
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.logger-filter-group {
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid hsl(var(--color-border));
+  border-radius: 4px;
+  background: hsl(var(--color-surface));
+}
+
+.logger-filter-group button {
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: hsl(var(--color-text-secondary));
+  font-size: 10px;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.logger-filter-group button:hover {
+  color: hsl(var(--color-text));
+}
+
+.logger-filter-group button.is-active {
+  background: hsl(var(--color-primary) / 0.1);
+  color: hsl(var(--color-primary-hover));
+  font-weight: 600;
+}
+
+.logger-filter-group button:focus-visible,
+.logger-batch-row:focus-visible,
+.logger-attempt-row:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid hsl(var(--color-primary));
+  outline-offset: -2px;
+}
+
+.logger-batch-list {
+  overflow: hidden;
+  border: 1px solid hsl(var(--color-border));
+  border-radius: 5px;
+  background: hsl(var(--color-surface));
+}
+
+.logger-batch-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(112px, 1.2fr) minmax(92px, auto) minmax(72px, auto) minmax(74px, auto) 64px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 0;
+  border-bottom: 1px solid hsl(var(--color-border));
+  background: transparent;
+  color: hsl(var(--color-text));
+  text-align: left;
+  cursor: pointer;
+}
+
+.logger-batch-row:last-child {
+  border-bottom: 0;
+}
+
+.logger-batch-row:hover {
+  background: hsl(var(--color-background));
+}
+
+.logger-batch-row.is-selected {
+  background: hsl(var(--color-primary) / 0.08);
+  box-shadow: inset 2px 0 0 hsl(var(--color-primary));
+}
+
+.logger-batch-identity {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.logger-batch-identity strong {
+  color: hsl(var(--color-text));
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.logger-batch-identity span,
+.logger-batch-result,
+.logger-batch-duration {
+  color: hsl(var(--color-text-secondary));
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.logger-batch-duration {
+  text-align: right;
+}
+
+.logger-filter-empty {
+  padding: 18px;
+  color: hsl(var(--color-text-secondary));
+  font-size: 11px;
+  text-align: center;
+}
+
+.logger-attempt-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid hsl(var(--color-border));
+}
+
+.logger-attempt-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.logger-attempt-header > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.logger-attempt-header > div > span {
+  color: hsl(var(--color-text-secondary));
+  font-size: 10px;
+}
+
+.logger-batch-error {
+  max-width: 58%;
+  color: hsl(0 64% 40%);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: right;
+}
+
+.logger-attempt-layout {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.logger-attempt-list {
+  overflow: hidden;
+  border: 1px solid hsl(var(--color-border));
+  border-radius: 5px;
+  background: hsl(var(--color-surface));
+}
+
+.logger-attempt-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 3px;
+  padding: 7px 8px;
+  border: 0;
+  border-bottom: 1px solid hsl(var(--color-border));
+  background: transparent;
+  color: hsl(var(--color-text));
+  font-size: 10px;
+  line-height: 15px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.logger-attempt-row:last-child {
+  border-bottom: 0;
+}
+
+.logger-attempt-row:hover {
+  background: hsl(var(--color-background));
+}
+
+.logger-attempt-row.is-selected {
+  background: hsl(var(--color-primary) / 0.08);
+  box-shadow: inset 2px 0 0 hsl(var(--color-primary));
+}
+
+.logger-attempt-row > span:last-child {
+  color: hsl(var(--color-text-secondary));
+  font-variant-numeric: tabular-nums;
+}
+
+.logger-attempt-detail {
+  min-width: 0;
+}
+
+.logger-attempt-metadata {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 7px;
+  color: hsl(var(--color-text-secondary));
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.logger-attempt-error {
+  margin-bottom: 8px;
+  padding: 8px 9px;
+  border: 1px solid hsl(var(--color-error) / 0.22);
+  border-radius: 4px;
+  background: hsl(var(--color-error) / 0.05);
+  color: hsl(0 64% 40%);
+  font-size: 10px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .logger-modal-backdrop {
+    align-items: stretch;
+    padding: 10px;
+  }
+
+  .logger-modal-dialog {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .logger-modal-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .logger-modal-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .logger-modal-content {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .logger-entry-list {
+    flex: 0 0 38%;
+    border-right: 0;
+    border-bottom: 1px solid hsl(var(--color-border));
+  }
+
+  .logger-detail-panel {
+    flex: 1;
+  }
+
+  .logger-batch-toolbar,
+  .logger-attempt-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .logger-batch-row {
+    grid-template-columns: minmax(106px, 1fr) minmax(84px, auto) 62px;
+  }
+
+  .logger-batch-result {
+    display: none;
+  }
+
+  .logger-attempt-layout {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .logger-attempt-list {
+    width: 100%;
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .logger-attempt-row {
+    min-width: 124px;
+    border-right: 1px solid hsl(var(--color-border));
+    border-bottom: 0;
+  }
+
+  .logger-attempt-detail {
+    width: 100%;
+  }
+
+  .logger-batch-error {
+    max-width: 100%;
+    text-align: left;
+  }
+}
+
 .operation-confirmation-backdrop {
   position: fixed;
   inset: 0;
@@ -690,6 +1406,9 @@
   .settings-prompt-input,
   .operation-confirmation-backdrop,
   .operation-confirmation-dialog,
+  .logger-modal-backdrop,
+  .logger-modal-dialog,
+  .logger-entry,
   .app-notification {
     transition: none;
     animation: none;

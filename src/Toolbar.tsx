@@ -13,6 +13,10 @@ import {
   getSelectedExecutableFiles,
   recomputeFileStatuses,
 } from './shared/lib/fileUtils';
+import {
+  createAnalysisSessionLog,
+  dispatchAnalysisLifecycleEvent,
+} from './shared/lib/analysisLog';
 import type { FileItem } from './shared/types';
 import SettingsDialog from './SettingsDialog';
 
@@ -58,6 +62,7 @@ export default function Toolbar() {
   const renameTriggerButtonRef = useRef<HTMLButtonElement | null>(null);
   const conflictCleanupTriggerButtonRef = useRef<HTMLButtonElement | null>(null);
   const isAnalysisPausedRef = useRef(false);
+  const activeAnalysisSessionIdRef = useRef<string | null>(null);
   const resumeWaitersRef = useRef<Array<() => void>>([]);
 
   const conflictCleanupPlan = useMemo(
@@ -192,12 +197,26 @@ export default function Toolbar() {
     if (isAnalysisPausedRef.current) {
       isAnalysisPausedRef.current = false;
       setAnalysisProgress({ isPaused: false });
+      if (activeAnalysisSessionIdRef.current) {
+        dispatchAnalysisLifecycleEvent({
+          type: 'session-status',
+          sessionId: activeAnalysisSessionIdRef.current,
+          status: 'running',
+        });
+      }
       releasePausedWorkers();
       return;
     }
 
     isAnalysisPausedRef.current = true;
     setAnalysisProgress({ isPaused: true });
+    if (activeAnalysisSessionIdRef.current) {
+      dispatchAnalysisLifecycleEvent({
+        type: 'session-status',
+        sessionId: activeAnalysisSessionIdRef.current,
+        status: 'paused',
+      });
+    }
   };
 
   const handleSelectDirectory = async () => {
@@ -269,6 +288,18 @@ export default function Toolbar() {
       batches.push(analyzableFiles.slice(batchStart, batchStart + settings.batchSize));
     }
 
+    const analysisSessionId = crypto.randomUUID();
+    const analysisStartedAt = Date.now();
+    activeAnalysisSessionIdRef.current = analysisSessionId;
+    dispatchAnalysisLifecycleEvent({
+      type: 'session-started',
+      session: createAnalysisSessionLog(
+        analysisSessionId,
+        analysisStartedAt,
+        batches.map((batch) => batch.length)
+      ),
+    });
+
     isAnalysisPausedRef.current = false;
     releasePausedWorkers();
     setAnalysisProgress({
@@ -279,9 +310,18 @@ export default function Toolbar() {
       isPaused: false,
     });
 
+    let successfulAnalyzedFileCount = 0;
+    let failedAnalyzedFileCount = 0;
+
     const processBatch = async (batchIndex: number) => {
       const batch = batches[batchIndex];
       const batchFileIds = new Set(batch.map((file) => file.id));
+      dispatchAnalysisLifecycleEvent({
+        type: 'batch-started',
+        sessionId: analysisSessionId,
+        batchIndex,
+        startedAt: Date.now(),
+      });
 
       setFiles((currentFiles) =>
         currentFiles.map((file) =>
@@ -302,10 +342,29 @@ export default function Toolbar() {
           fileId: file.id,
           originalStem: file.originalStem,
         }));
-        const result = await analyzeBatch(settings, batchIndex, requests);
+        const result = await analyzeBatch(
+          settings,
+          analysisSessionId,
+          batchIndex,
+          requests
+        );
         const resultByFileId = new Map(
           result.results.map((analysisResult) => [analysisResult.fileId, analysisResult])
         );
+        const batchFailedFileCount = batch.reduce((failedFileCount, file) => {
+          const analysisResult = resultByFileId.get(file.id);
+          const resultError = analysisResult?.error
+            ?? (!analysisResult?.suggestedName
+              ? 'LLM 响应中缺少建议名称'
+              : !analysisResult.normalizedName
+                ? '建议名称无法通过校验'
+                : undefined);
+
+          return failedFileCount + (resultError ? 1 : 0);
+        }, 0);
+        const batchSuccessfulFileCount = batch.length - batchFailedFileCount;
+        successfulAnalyzedFileCount += batchSuccessfulFileCount;
+        failedAnalyzedFileCount += batchFailedFileCount;
 
         setFiles((currentFiles) => {
           const filesWithResults = currentFiles.map((file) => {
@@ -344,7 +403,18 @@ export default function Toolbar() {
         setAnalysisProgress((previousProgress) => ({
           completedBatches: previousProgress.completedBatches + 1,
         }));
+        dispatchAnalysisLifecycleEvent({
+          type: 'batch-finished',
+          sessionId: analysisSessionId,
+          batchIndex,
+          status: batchFailedFileCount === 0 ? 'success' : 'partial',
+          finishedAt: Date.now(),
+          successfulFileCount: batchSuccessfulFileCount,
+          failedFileCount: batchFailedFileCount,
+        });
       } catch (error) {
+        const errorMessage = formatExecutionError(error);
+        failedAnalyzedFileCount += batch.length;
         console.error(`批次 ${batchIndex} 失败:`, error);
         setFiles((currentFiles) =>
           recomputeFileStatuses(
@@ -353,7 +423,7 @@ export default function Toolbar() {
                 ? {
                     ...file,
                     status: 'failed' as const,
-                    error: `批次失败：${error}`,
+                    error: `批次失败：${errorMessage}`,
                   }
                 : file
             )
@@ -363,6 +433,16 @@ export default function Toolbar() {
         setAnalysisProgress((previousProgress) => ({
           failedBatches: previousProgress.failedBatches + 1,
         }));
+        dispatchAnalysisLifecycleEvent({
+          type: 'batch-finished',
+          sessionId: analysisSessionId,
+          batchIndex,
+          status: 'failed',
+          finishedAt: Date.now(),
+          successfulFileCount: 0,
+          failedFileCount: batch.length,
+          error: errorMessage,
+        });
       }
     };
 
@@ -391,6 +471,20 @@ export default function Toolbar() {
         Array.from({ length: workerCount }, () => runWorker())
       );
     } finally {
+      const finalSessionStatus = failedAnalyzedFileCount === 0
+        ? 'success'
+        : successfulAnalyzedFileCount === 0
+          ? 'failed'
+          : 'partial';
+      dispatchAnalysisLifecycleEvent({
+        type: 'session-finished',
+        sessionId: analysisSessionId,
+        status: finalSessionStatus,
+        finishedAt: Date.now(),
+      });
+      if (activeAnalysisSessionIdRef.current === analysisSessionId) {
+        activeAnalysisSessionIdRef.current = null;
+      }
       isAnalysisPausedRef.current = false;
       releasePausedWorkers();
       setAnalysisProgress({ isRunning: false, isPaused: false });

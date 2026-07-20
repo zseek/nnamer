@@ -268,6 +268,26 @@ export function collectFileIdsLeavingStatusFilter(
   return fileIdsLeavingFilter;
 }
 
+function compareConflictRetentionPriority(
+  leftFile: FileItem,
+  rightFile: FileItem
+): number {
+  // 优先保留体积更大的副本；体积相同时按原文件名稳定排序，保证清理结果可复现。
+  if (rightFile.sizeBytes !== leftFile.sizeBytes) {
+    return rightFile.sizeBytes - leftFile.sizeBytes;
+  }
+
+  const originalNameComparison = leftFile.originalName.localeCompare(
+    rightFile.originalName,
+    'zh-CN'
+  );
+  if (originalNameComparison !== 0) {
+    return originalNameComparison;
+  }
+
+  return leftFile.id.localeCompare(rightFile.id);
+}
+
 export function groupFilesByConflict(files: FileItem[]): ConflictGroup[] {
   const conflictMap = new Map<string, FileItem[]>();
 
@@ -284,18 +304,15 @@ export function groupFilesByConflict(files: FileItem[]): ConflictGroup[] {
 
   for (const groupFiles of conflictMap.values()) {
     if (groupFiles.length > 1) {
-      const sortedBySize = [...groupFiles].sort(
-        (a, b) => b.sizeBytes - a.sizeBytes
-      );
-      const largestSize = sortedBySize[0].sizeBytes;
-      const largestFiles = sortedBySize.filter(
-        (file) => file.sizeBytes === largestSize
+      const sortedForRetention = [...groupFiles].sort(
+        compareConflictRetentionPriority
       );
 
       conflictGroups.push({
         normalizedName: groupFiles[0].normalizedName!,
         files: groupFiles,
-        largestFileId: largestFiles.length === 1 ? largestFiles[0].id : undefined,
+        // 即使多个文件大小相同，也确定性地保留其中一个，其余可自动清理。
+        largestFileId: sortedForRetention[0].id,
       });
     }
   }
@@ -313,11 +330,6 @@ export function createConflictCleanupPlan(files: FileItem[]): ConflictCleanupPla
   const skippedGroups: ConflictGroup[] = [];
 
   for (const conflictGroup of conflictGroups) {
-    if (!conflictGroup.largestFileId) {
-      skippedGroups.push(conflictGroup);
-      continue;
-    }
-
     const retainedFile = conflictGroup.files.find(
       (file) => file.id === conflictGroup.largestFileId
     );

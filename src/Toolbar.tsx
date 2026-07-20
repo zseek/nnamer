@@ -497,9 +497,7 @@ export default function Toolbar() {
         {
           tone: 'warning',
           title: '没有可自动清理的冲突',
-          message: conflictCleanupPlan.skippedGroups.length > 0
-            ? `${conflictCleanupPlan.skippedGroups.length} 组冲突的最大文件大小相同，请手动确认要保留的文件。`
-            : '当前没有建议文件名相同的冲突项。',
+          message: '当前没有建议文件名相同的冲突项。',
         },
         6000
       );
@@ -559,19 +557,14 @@ export default function Toolbar() {
         );
       }
 
-      const skippedGroupCount = latestCleanupPlan.skippedGroups.length;
       if (failureCount === 0) {
         displayAppNotification(
           {
-            tone: skippedGroupCount > 0 ? 'warning' : 'success',
-            title: skippedGroupCount > 0 ? '可判定的冲突已清理' : '冲突清理完成',
-            message: `已保留 ${latestCleanupPlan.resolvableGroups.length} 个较大文件，并将 ${successfulFileIds.size} 个较小文件移入回收站。${
-              skippedGroupCount > 0
-                ? `另有 ${skippedGroupCount} 组因最大文件大小相同而保留。`
-                : ''
-            }`,
+            tone: 'success',
+            title: '冲突清理完成',
+            message: `已保留 ${latestCleanupPlan.resolvableGroups.length} 个文件，并将 ${successfulFileIds.size} 个重复文件移入回收站。`,
           },
-          skippedGroupCount > 0 ? 7000 : 5000
+          5000
         );
         return;
       }
@@ -857,11 +850,7 @@ export default function Toolbar() {
               className="btn btn-warning"
               onClick={handleRequestConflictCleanup}
               disabled={analysisProgress.isRunning || isFileOperationRunning}
-              title={
-                conflictCleanupPlan.filesToRemove.length > 0
-                  ? '保留每组唯一最大的文件，将其余较小文件移入回收站'
-                  : '存在最大文件大小相同的冲突组，需要手动处理'
-              }
+              title="每组保留一个体积最大的文件；大小相同时保留文件名排序靠前的一个，其余移入回收站"
             >
               {isCleaningConflicts
                 ? '正在清理冲突...'
@@ -968,9 +957,9 @@ export default function Toolbar() {
           >
             <div className="operation-confirmation-header">
               <div>
-                <h2 id="conflict-cleanup-title">保留较大文件并清理冲突</h2>
+                <h2 id="conflict-cleanup-title">保留一个副本并清理冲突</h2>
                 <p id="conflict-cleanup-description">
-                  每组保留唯一最大的文件，其余较小文件将移入系统回收站。
+                  每组保留体积最大的一个文件；若多个文件大小相同，则按原文件名排序保留其中一个，其余将移入系统回收站。
                 </p>
               </div>
             </div>
@@ -985,12 +974,6 @@ export default function Toolbar() {
                 <strong>{conflictCleanupPlan.filesToRemove.length}</strong>
               </div>
             </div>
-
-            {conflictCleanupPlan.skippedGroups.length > 0 && (
-              <div className="conflict-cleanup-skipped">
-                {conflictCleanupPlan.skippedGroups.length} 组的最大文件大小相同，将跳过并保留全部文件。
-              </div>
-            )}
 
             <div className="operation-confirmation-notice conflict-cleanup-notice">
               执行前会再次校验文件大小和修改时间。元数据变化或移动失败的文件不会从列表移除。

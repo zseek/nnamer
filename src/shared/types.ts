@@ -85,7 +85,8 @@ export interface AnalysisProgress {
 export interface ConflictGroup {
   normalizedName: string;
   files: FileItem[];
-  largestFileId?: string;
+  /** 自动清理时保留的文件；大小相同时也会确定性选出一个。 */
+  largestFileId: string;
 }
 
 export interface ResolvableConflictGroup {

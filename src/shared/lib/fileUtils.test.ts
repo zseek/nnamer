@@ -370,21 +370,24 @@ describe('createConflictCleanupPlan', () => {
     expect(cleanupPlan.skippedGroups).toHaveLength(0);
   });
 
-  it('skips a conflict group when the largest file size is tied', () => {
+  it('retains one file deterministically when the largest file size is tied', () => {
     const files = [
       createFile('first-largest', {
+        originalName: '作者乙-相同书名.txt',
         sizeBytes: 600,
         suggestedName: '相同书名',
         normalizedName: '相同书名',
         status: 'conflict',
       }),
       createFile('second-largest', {
+        originalName: '作者甲-相同书名.txt',
         sizeBytes: 600,
         suggestedName: '相同书名',
         normalizedName: '相同书名',
         status: 'conflict',
       }),
       createFile('smaller', {
+        originalName: '作者丙-相同书名.txt',
         sizeBytes: 500,
         suggestedName: '相同书名',
         normalizedName: '相同书名',
@@ -394,10 +397,44 @@ describe('createConflictCleanupPlan', () => {
 
     const cleanupPlan = createConflictCleanupPlan(files);
 
-    expect(cleanupPlan.resolvableGroups).toHaveLength(0);
-    expect(cleanupPlan.filesToRemove).toHaveLength(0);
-    expect(cleanupPlan.skippedGroups).toHaveLength(1);
-    expect(cleanupPlan.skippedGroups[0].largestFileId).toBeUndefined();
+    expect(cleanupPlan.resolvableGroups).toHaveLength(1);
+    // 体积相同时按原文件名排序，保留“作者甲-相同书名.txt”
+    expect(cleanupPlan.resolvableGroups[0].retainedFile.id).toBe('second-largest');
+    expect(
+      cleanupPlan.resolvableGroups[0].filesToRemove.map((file) => file.id).sort()
+    ).toEqual(['first-largest', 'smaller'].sort());
+    expect(cleanupPlan.filesToRemove.map((file) => file.id).sort()).toEqual(
+      ['first-largest', 'smaller'].sort()
+    );
+    expect(cleanupPlan.skippedGroups).toHaveLength(0);
+  });
+
+  it('retains any one file when all conflict members have the same size', () => {
+    const files = [
+      createFile('duplicate-b', {
+        originalName: 'B-书名.txt',
+        sizeBytes: 1024,
+        suggestedName: '书名',
+        normalizedName: '书名',
+        status: 'conflict',
+      }),
+      createFile('duplicate-a', {
+        originalName: 'A-书名.txt',
+        sizeBytes: 1024,
+        suggestedName: '书名',
+        normalizedName: '书名',
+        status: 'conflict',
+      }),
+    ];
+
+    const cleanupPlan = createConflictCleanupPlan(files);
+
+    expect(cleanupPlan.resolvableGroups).toHaveLength(1);
+    expect(cleanupPlan.resolvableGroups[0].retainedFile.id).toBe('duplicate-a');
+    expect(cleanupPlan.filesToRemove.map((file) => file.id)).toEqual([
+      'duplicate-b',
+    ]);
+    expect(cleanupPlan.skippedGroups).toHaveLength(0);
   });
 
   it('ignores duplicate names that are not currently valid conflicts', () => {

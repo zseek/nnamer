@@ -35,10 +35,10 @@ export interface FileItem {
   sizeBytes: number;
   modifiedAt: number;
   status: FileStatus;
-  selected: boolean;
   hasBeenRenamed?: boolean;
   suggestedName?: string;
   normalizedName?: string;
+  analysisSessionId?: string;
   error?: string;
 }
 
@@ -79,7 +79,6 @@ export interface AnalysisProgress {
   completedBatches: number;
   failedBatches: number;
   isRunning: boolean;
-  isPaused: boolean;
 }
 
 export interface ConflictGroup {

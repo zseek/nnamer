@@ -9,13 +9,17 @@ import {
 } from './shared/lib/api';
 import {
   applySuccessfulFileRenames,
+  chunkItems,
   createConflictCleanupPlan,
+  getSelectedAnalyzableFiles,
   getSelectedExecutableFiles,
   recomputeFileStatuses,
 } from './shared/lib/fileUtils';
 import {
+  createAnalysisBatchQueue,
   createAnalysisSessionLog,
   dispatchAnalysisLifecycleEvent,
+  type AnalysisBatchQueue,
 } from './shared/lib/analysisLog';
 import type { FileItem } from './shared/types';
 import SettingsDialog from './SettingsDialog';
@@ -43,9 +47,13 @@ export default function Toolbar() {
     setCurrentDirectory,
     setFiles,
     files,
+    selectedFileIds,
+    clearSelectionForIds,
     settings,
     setAnalysisProgress,
     analysisProgress,
+    fileOperationProgress,
+    setFileOperationProgress,
     setShowLogger,
     clearFiles,
   } = useAppStore();
@@ -61,13 +69,15 @@ export default function Toolbar() {
   const confirmationDialogRef = useRef<HTMLElement | null>(null);
   const renameTriggerButtonRef = useRef<HTMLButtonElement | null>(null);
   const conflictCleanupTriggerButtonRef = useRef<HTMLButtonElement | null>(null);
-  const isAnalysisPausedRef = useRef(false);
   const activeAnalysisSessionIdRef = useRef<string | null>(null);
-  const resumeWaitersRef = useRef<Array<() => void>>([]);
+  const activeAnalysisQueueRef = useRef<AnalysisBatchQueue<FileItem> | null>(null);
 
   const conflictCleanupPlan = useMemo(
-    () => createConflictCleanupPlan(files),
-    [files]
+    () => createConflictCleanupPlan(files, {
+      selectedOnly: true,
+      selectedFileIds,
+    }),
+    [files, selectedFileIds]
   );
   const isConfirmationOpen =
     isRenameConfirmationOpen || isConflictCleanupConfirmationOpen;
@@ -75,21 +85,6 @@ export default function Toolbar() {
   const closeActiveConfirmation = () => {
     setIsRenameConfirmationOpen(false);
     setIsConflictCleanupConfirmationOpen(false);
-  };
-
-  const releasePausedWorkers = () => {
-    const waitingResolvers = resumeWaitersRef.current.splice(0);
-    waitingResolvers.forEach((resolveWaitingWorker) => resolveWaitingWorker());
-  };
-
-  const waitUntilAnalysisResumes = async () => {
-    if (!isAnalysisPausedRef.current) {
-      return;
-    }
-
-    await new Promise<void>((resolve) => {
-      resumeWaitersRef.current.push(resolve);
-    });
   };
 
   const dismissAppNotification = () => {
@@ -184,39 +179,39 @@ export default function Toolbar() {
 
     dismissAppNotification();
     closeActiveConfirmation();
-    isAnalysisPausedRef.current = false;
-    releasePausedWorkers();
+    activeAnalysisQueueRef.current = null;
     clearFiles();
   };
 
-  const handleToggleAnalysisPause = () => {
-    if (!analysisProgress.isRunning) {
+  const handlePauseAnalysis = () => {
+    const activeAnalysisQueue = activeAnalysisQueueRef.current;
+    const analysisSessionId = activeAnalysisSessionIdRef.current;
+    if (!analysisProgress.isRunning || !activeAnalysisQueue || !analysisSessionId) {
       return;
     }
 
-    if (isAnalysisPausedRef.current) {
-      isAnalysisPausedRef.current = false;
-      setAnalysisProgress({ isPaused: false });
-      if (activeAnalysisSessionIdRef.current) {
-        dispatchAnalysisLifecycleEvent({
-          type: 'session-status',
-          sessionId: activeAnalysisSessionIdRef.current,
-          status: 'running',
-        });
-      }
-      releasePausedWorkers();
-      return;
-    }
+    activeAnalysisQueue.requestStop();
+    const unstartedFiles = activeAnalysisQueue.getUnclaimedItems();
 
-    isAnalysisPausedRef.current = true;
-    setAnalysisProgress({ isPaused: true });
-    if (activeAnalysisSessionIdRef.current) {
-      dispatchAnalysisLifecycleEvent({
-        type: 'session-status',
-        sessionId: activeAnalysisSessionIdRef.current,
-        status: 'paused',
-      });
-    }
+    dispatchAnalysisLifecycleEvent({
+      type: 'session-finished',
+      sessionId: analysisSessionId,
+      status: 'stopped',
+      finishedAt: Date.now(),
+    });
+
+    activeAnalysisSessionIdRef.current = null;
+    activeAnalysisQueueRef.current = null;
+    setAnalysisProgress({ isRunning: false });
+
+    displayAppNotification(
+      {
+        tone: 'warning',
+        title: '分析已暂停',
+        message: `已停止后续批次，剩余 ${unstartedFiles.length} 个项目未分析且未选中。修改设置后可重新选择这些项目进行分析。`,
+      },
+      8000
+    );
   };
 
   const handleSelectDirectory = async () => {
@@ -235,7 +230,6 @@ export default function Toolbar() {
           const scannedFiles = await scanDirectory(selected);
           const filesWithDefaults: FileItem[] = scannedFiles.map((file) => ({
             ...file,
-            selected: false,
             hasBeenRenamed: false,
             status: 'pending',
           }));
@@ -258,26 +252,20 @@ export default function Toolbar() {
       return;
     }
 
-    const selectedFiles = files.filter((file) => file.selected);
-    if (selectedFiles.length === 0) {
-      alert('请先选择要分析的文件');
-      return;
-    }
-
-    const analyzableFiles = selectedFiles.filter(
-      (file) => file.status === 'pending' || file.status === 'failed'
-    );
+    const analyzableFiles = getSelectedAnalyzableFiles(files, selectedFileIds);
     if (analyzableFiles.length === 0) {
-      alert('所选文件没有待分析或可重试的项目');
+      displayAppNotification(
+        {
+          tone: 'warning',
+          title: '没有可分析的已选项目',
+          message: '请选中待分析、失败或已分析完成的项目，再开始分析。',
+        },
+        6000
+      );
       return;
     }
 
-    const selectedFileIds = new Set(selectedFiles.map((file) => file.id));
-    setFiles((currentFiles) =>
-      currentFiles.map((file) =>
-        selectedFileIds.has(file.id) ? { ...file, selected: false } : file
-      )
-    );
+    clearSelectionForIds(analyzableFiles.map((file) => file.id));
 
     const batches: FileItem[][] = [];
     for (
@@ -300,14 +288,11 @@ export default function Toolbar() {
       ),
     });
 
-    isAnalysisPausedRef.current = false;
-    releasePausedWorkers();
     setAnalysisProgress({
       totalBatches: batches.length,
       completedBatches: 0,
       failedBatches: 0,
       isRunning: true,
-      isPaused: false,
     });
 
     let successfulAnalyzedFileCount = 0;
@@ -332,6 +317,7 @@ export default function Toolbar() {
                 normalizedName: undefined,
                 error: undefined,
                 status: 'analyzing',
+                analysisSessionId,
               }
             : file
         )
@@ -368,7 +354,10 @@ export default function Toolbar() {
 
         setFiles((currentFiles) => {
           const filesWithResults = currentFiles.map((file) => {
-            if (!batchFileIds.has(file.id)) {
+            if (
+              !batchFileIds.has(file.id)
+              || file.analysisSessionId !== analysisSessionId
+            ) {
               return file;
             }
 
@@ -377,6 +366,7 @@ export default function Toolbar() {
               return {
                 ...file,
                 status: 'failed' as const,
+                analysisSessionId: undefined,
                 error: 'LLM 响应中缺少此文件',
               };
             }
@@ -392,6 +382,7 @@ export default function Toolbar() {
               ...file,
               suggestedName: analysisResult.suggestedName,
               normalizedName: analysisResult.normalizedName,
+              analysisSessionId: undefined,
               error: resultError,
               status: resultError ? 'failed' as const : 'ready' as const,
             };
@@ -400,9 +391,11 @@ export default function Toolbar() {
           return recomputeFileStatuses(filesWithResults);
         });
 
-        setAnalysisProgress((previousProgress) => ({
-          completedBatches: previousProgress.completedBatches + 1,
-        }));
+        if (activeAnalysisSessionIdRef.current === analysisSessionId) {
+          setAnalysisProgress((previousProgress) => ({
+            completedBatches: previousProgress.completedBatches + 1,
+          }));
+        }
         dispatchAnalysisLifecycleEvent({
           type: 'batch-finished',
           sessionId: analysisSessionId,
@@ -420,9 +413,11 @@ export default function Toolbar() {
           recomputeFileStatuses(
             currentFiles.map((file) =>
               batchFileIds.has(file.id)
+                && file.analysisSessionId === analysisSessionId
                 ? {
                     ...file,
                     status: 'failed' as const,
+                    analysisSessionId: undefined,
                     error: `批次失败：${errorMessage}`,
                   }
                 : file
@@ -430,9 +425,11 @@ export default function Toolbar() {
           )
         );
 
-        setAnalysisProgress((previousProgress) => ({
-          failedBatches: previousProgress.failedBatches + 1,
-        }));
+        if (activeAnalysisSessionIdRef.current === analysisSessionId) {
+          setAnalysisProgress((previousProgress) => ({
+            failedBatches: previousProgress.failedBatches + 1,
+          }));
+        }
         dispatchAnalysisLifecycleEvent({
           type: 'batch-finished',
           sessionId: analysisSessionId,
@@ -446,22 +443,16 @@ export default function Toolbar() {
       }
     };
 
-    let nextBatchIndex = 0;
+    const batchQueue = createAnalysisBatchQueue(batches);
+    activeAnalysisQueueRef.current = batchQueue;
     const runWorker = async () => {
       while (true) {
-        if (nextBatchIndex >= batches.length) {
+        const claimedBatch = batchQueue.claimNextBatch();
+        if (!claimedBatch) {
           return;
         }
 
-        await waitUntilAnalysisResumes();
-
-        if (nextBatchIndex >= batches.length) {
-          return;
-        }
-
-        const claimedBatchIndex = nextBatchIndex;
-        nextBatchIndex += 1;
-        await processBatch(claimedBatchIndex);
+        await processBatch(claimedBatch.batchIndex);
       }
     };
 
@@ -471,23 +462,31 @@ export default function Toolbar() {
         Array.from({ length: workerCount }, () => runWorker())
       );
     } finally {
-      const finalSessionStatus = failedAnalyzedFileCount === 0
-        ? 'success'
-        : successfulAnalyzedFileCount === 0
-          ? 'failed'
-          : 'partial';
-      dispatchAnalysisLifecycleEvent({
-        type: 'session-finished',
-        sessionId: analysisSessionId,
-        status: finalSessionStatus,
-        finishedAt: Date.now(),
-      });
-      if (activeAnalysisSessionIdRef.current === analysisSessionId) {
-        activeAnalysisSessionIdRef.current = null;
+      const wasStopped = batchQueue.wasStopRequested();
+      const finalSessionStatus = wasStopped
+        ? 'stopped'
+        : failedAnalyzedFileCount === 0
+          ? 'success'
+          : successfulAnalyzedFileCount === 0
+            ? 'failed'
+            : 'partial';
+
+      if (!wasStopped) {
+        dispatchAnalysisLifecycleEvent({
+          type: 'session-finished',
+          sessionId: analysisSessionId,
+          status: finalSessionStatus,
+          finishedAt: Date.now(),
+        });
       }
-      isAnalysisPausedRef.current = false;
-      releasePausedWorkers();
-      setAnalysisProgress({ isRunning: false, isPaused: false });
+
+      const isStillActiveSession =
+        activeAnalysisSessionIdRef.current === analysisSessionId;
+      if (isStillActiveSession) {
+        activeAnalysisSessionIdRef.current = null;
+        activeAnalysisQueueRef.current = null;
+        setAnalysisProgress({ isRunning: false });
+      }
     }
   };
 
@@ -496,10 +495,10 @@ export default function Toolbar() {
       displayAppNotification(
         {
           tone: 'warning',
-          title: '没有可自动清理的冲突',
-          message: '当前没有建议文件名相同的冲突项。',
+          title: '没有可清理的已选冲突',
+          message: '请先选中至少两个建议文件名相同的冲突项，再执行清理。未选中的冲突会保留，可稍后再处理。',
         },
-        6000
+        7000
       );
       return;
     }
@@ -508,7 +507,10 @@ export default function Toolbar() {
   };
 
   const handleExecuteConflictCleanup = async () => {
-    const latestCleanupPlan = createConflictCleanupPlan(files);
+    const latestCleanupPlan = createConflictCleanupPlan(files, {
+      selectedOnly: true,
+      selectedFileIds,
+    });
     const filesToRemove = latestCleanupPlan.filesToRemove;
 
     if (!currentDirectory || filesToRemove.length === 0) {
@@ -528,9 +530,21 @@ export default function Toolbar() {
     dismissAppNotification();
     setIsCleaningConflicts(true);
 
+    const totalToRemove = filesToRemove.length;
+    let completedCount = 0;
+    let successfulCount = 0;
+    let failureCount = 0;
+    let firstFailureDetail: string | undefined;
+
+    setFileOperationProgress({
+      kind: 'conflict-cleanup',
+      completed: 0,
+      total: totalToRemove,
+      failed: 0,
+    });
+
     try {
-      const results = await moveFilesToRecycleBin(
-        currentDirectory,
+      const operationBatches = chunkItems(
         filesToRemove.map((file) => ({
           fileId: file.id,
           originalName: file.originalName,
@@ -538,23 +552,58 @@ export default function Toolbar() {
           modifiedAt: file.modifiedAt,
         }))
       );
-      const candidateFileIds = new Set(filesToRemove.map((file) => file.id));
-      const successfulFileIds = new Set(
-        results
-          .filter(
-            (result) => result.success && candidateFileIds.has(result.fileId)
-          )
-          .map((result) => result.fileId)
-      );
-      const failedResults = results.filter((result) => !result.success);
-      const failureCount = filesToRemove.length - successfulFileIds.size;
 
-      if (successfulFileIds.size > 0) {
-        setFiles((currentFiles) =>
-          recomputeFileStatuses(
-            currentFiles.filter((file) => !successfulFileIds.has(file.id))
-          )
+      for (const operationBatch of operationBatches) {
+        const results = await moveFilesToRecycleBin(
+          currentDirectory,
+          operationBatch
         );
+        const candidateFileIds = new Set(
+          operationBatch.map((operation) => operation.fileId)
+        );
+        const batchSuccessfulFileIds = new Set(
+          results
+            .filter(
+              (result) => result.success && candidateFileIds.has(result.fileId)
+            )
+            .map((result) => result.fileId)
+        );
+        const batchFailedResults = results.filter((result) => !result.success);
+        const batchFailureCount = Math.max(
+          0,
+          operationBatch.length - batchSuccessfulFileIds.size
+        );
+
+        if (batchSuccessfulFileIds.size > 0) {
+          setFiles((currentFiles) =>
+            recomputeFileStatuses(
+              currentFiles.filter((file) => !batchSuccessfulFileIds.has(file.id))
+            )
+          );
+          clearSelectionForIds(batchSuccessfulFileIds);
+        }
+
+        successfulCount += batchSuccessfulFileIds.size;
+        failureCount += batchFailureCount;
+        completedCount += operationBatch.length;
+
+        if (!firstFailureDetail && batchFailedResults[0]) {
+          const firstFailure = batchFailedResults[0];
+          const failedFileName =
+            filesToRemove.find((file) => file.id === firstFailure.fileId)
+              ?.originalName
+            ?? firstFailure.fileId;
+          firstFailureDetail = `${failedFileName}：${
+            firstFailure.error ?? '未知错误'
+          }`;
+        }
+
+        setFileOperationProgress({
+          kind: 'conflict-cleanup',
+          completed: completedCount,
+          total: totalToRemove,
+          failed: failureCount,
+        });
       }
 
       if (failureCount === 0) {
@@ -562,28 +611,18 @@ export default function Toolbar() {
           {
             tone: 'success',
             title: '冲突清理完成',
-            message: `已保留 ${latestCleanupPlan.resolvableGroups.length} 个文件，并将 ${successfulFileIds.size} 个重复文件移入回收站。`,
+            message: `已保留 ${latestCleanupPlan.resolvableGroups.length} 个文件，并将 ${successfulCount} 个重复文件移入回收站。`,
           },
           5000
         );
         return;
       }
 
-      const failedFileById = new Map(
-        filesToRemove.map((file) => [file.id, file.originalName])
-      );
-      const firstFailure = failedResults[0];
-      const firstFailureDetail = firstFailure
-        ? `${failedFileById.get(firstFailure.fileId) ?? firstFailure.fileId}：${
-            firstFailure.error ?? '未知错误'
-          }`
-        : '部分文件未返回操作结果';
-
       displayAppNotification(
         {
-          tone: successfulFileIds.size > 0 ? 'warning' : 'error',
-          title: successfulFileIds.size > 0 ? '部分冲突未能清理' : '冲突清理未完成',
-          message: `已移入回收站 ${successfulFileIds.size} 个，失败 ${failureCount} 个。失败项目仍保留在列表中。`,
+          tone: successfulCount > 0 ? 'warning' : 'error',
+          title: successfulCount > 0 ? '部分冲突未能清理' : '冲突清理未完成',
+          message: `已移入回收站 ${successfulCount} 个，失败 ${failureCount} 个。失败项目仍保留在列表中。`,
           detail: firstFailureDetail,
         },
         9000
@@ -601,11 +640,15 @@ export default function Toolbar() {
       );
     } finally {
       setIsCleaningConflicts(false);
+      setFileOperationProgress(null);
     }
   };
 
   const handleRequestRenameExecution = () => {
-    const selectedExecutableFileCount = getSelectedExecutableFiles(files).length;
+    const selectedExecutableFileCount = getSelectedExecutableFiles(
+      files,
+      selectedFileIds
+    ).length;
 
     if (selectedExecutableFileCount === 0) {
       displayAppNotification(
@@ -623,7 +666,10 @@ export default function Toolbar() {
   };
 
   const handleExecuteRename = async () => {
-    const selectedExecutableFiles = getSelectedExecutableFiles(files);
+    const selectedExecutableFiles = getSelectedExecutableFiles(
+      files,
+      selectedFileIds
+    );
 
     if (!currentDirectory || selectedExecutableFiles.length === 0) {
       setIsRenameConfirmationOpen(false);
@@ -642,55 +688,95 @@ export default function Toolbar() {
     dismissAppNotification();
     setIsRenaming(true);
 
-    const operations = selectedExecutableFiles.map((file) => ({
-      fileId: file.id,
-      originalName: file.originalName,
-      targetName: file.normalizedName!,
-    }));
+    const totalToRename = selectedExecutableFiles.length;
+    let completedCount = 0;
+    let successfulCount = 0;
+    let failureCount = 0;
+    let firstFailureDetail: string | undefined;
 
-    const metadataSnapshot = Object.fromEntries(
-      selectedExecutableFiles.map((file) => [
-        file.id,
-        {
-          sizeBytes: file.sizeBytes,
-          modifiedAt: file.modifiedAt,
-        },
-      ])
-    );
+    setFileOperationProgress({
+      kind: 'rename',
+      completed: 0,
+      total: totalToRename,
+      failed: 0,
+    });
 
     try {
-      const results = await executeRenameOperations(
-        currentDirectory,
-        operations,
-        metadataSnapshot
-      );
-      const filesById = new Map(
-        selectedExecutableFiles.map((file) => [file.id, file])
-      );
-      const successfulFileTargetById = new Map<string, string>();
+      const operationBatches = chunkItems(selectedExecutableFiles);
 
-      for (const result of results) {
-        const matchedFile = filesById.get(result.fileId);
-        if (result.success && matchedFile?.normalizedName) {
-          successfulFileTargetById.set(matchedFile.id, matchedFile.normalizedName);
-        }
-      }
-
-      const successfulFileIds = Array.from(successfulFileTargetById.keys());
-      const failedResults = results.filter((result) => !result.success);
-      const missingResultCount = Math.max(
-        0,
-        selectedExecutableFiles.length - results.length
-      );
-      const failureCount = Math.max(
-        0,
-        selectedExecutableFiles.length - successfulFileIds.length
-      );
-
-      if (successfulFileIds.length > 0) {
-        setFiles((currentFiles) =>
-          applySuccessfulFileRenames(currentFiles, successfulFileTargetById)
+      for (const fileBatch of operationBatches) {
+        const operations = fileBatch.map((file) => ({
+          fileId: file.id,
+          originalName: file.originalName,
+          targetName: file.normalizedName!,
+        }));
+        const metadataSnapshot = Object.fromEntries(
+          fileBatch.map((file) => [
+            file.id,
+            {
+              sizeBytes: file.sizeBytes,
+              modifiedAt: file.modifiedAt,
+            },
+          ])
         );
+
+        const results = await executeRenameOperations(
+          currentDirectory,
+          operations,
+          metadataSnapshot
+        );
+        const filesById = new Map(fileBatch.map((file) => [file.id, file]));
+        const successfulFileTargetById = new Map<string, string>();
+
+        for (const result of results) {
+          const matchedFile = filesById.get(result.fileId);
+          if (result.success && matchedFile?.normalizedName) {
+            successfulFileTargetById.set(
+              matchedFile.id,
+              matchedFile.normalizedName
+            );
+          }
+        }
+
+        const batchSuccessfulFileIds = Array.from(
+          successfulFileTargetById.keys()
+        );
+        const batchFailedResults = results.filter((result) => !result.success);
+        const batchMissingResultCount = Math.max(
+          0,
+          fileBatch.length - results.length
+        );
+        const batchFailureCount = Math.max(
+          0,
+          fileBatch.length - batchSuccessfulFileIds.length
+        );
+
+        if (batchSuccessfulFileIds.length > 0) {
+          setFiles((currentFiles) =>
+            applySuccessfulFileRenames(currentFiles, successfulFileTargetById)
+          );
+          clearSelectionForIds(batchSuccessfulFileIds);
+        }
+
+        successfulCount += batchSuccessfulFileIds.length;
+        failureCount += batchFailureCount;
+        completedCount += fileBatch.length;
+
+        if (!firstFailureDetail) {
+          const firstFailure = batchFailedResults[0];
+          if (firstFailure?.error) {
+            firstFailureDetail = `${firstFailure.fileId}：${firstFailure.error}`;
+          } else if (batchMissingResultCount > 0) {
+            firstFailureDetail = `${batchMissingResultCount} 个文件未返回执行结果`;
+          }
+        }
+
+        setFileOperationProgress({
+          kind: 'rename',
+          completed: completedCount,
+          total: totalToRename,
+          failed: failureCount,
+        });
       }
 
       if (failureCount === 0) {
@@ -698,26 +784,19 @@ export default function Toolbar() {
           {
             tone: 'success',
             title: '重命名完成',
-            message: `已成功重命名 ${successfulFileIds.length} 个文件，并保留为“已重命名”状态。`,
+            message: `已成功重命名 ${successfulCount} 个文件，并保留为“已重命名”状态。`,
           },
           4500
         );
         return;
       }
 
-      const firstFailure = failedResults[0];
-      const failureDetail = firstFailure?.error
-        ? `${firstFailure.fileId}：${firstFailure.error}`
-        : missingResultCount > 0
-          ? `${missingResultCount} 个文件未返回执行结果`
-          : undefined;
-
       displayAppNotification(
         {
-          tone: successfulFileIds.length > 0 ? 'warning' : 'error',
-          title: successfulFileIds.length > 0 ? '部分文件未能重命名' : '重命名未完成',
-          message: `成功 ${successfulFileIds.length} 个，失败 ${failureCount} 个。成功文件已标记为“已重命名”，失败文件仍保留以便检查。`,
-          detail: failureDetail,
+          tone: successfulCount > 0 ? 'warning' : 'error',
+          title: successfulCount > 0 ? '部分文件未能重命名' : '重命名未完成',
+          message: `成功 ${successfulCount} 个，失败 ${failureCount} 个。成功文件已标记为“已重命名”，失败文件仍保留以便检查。`,
+          detail: firstFailureDetail,
         },
         8000
       );
@@ -734,6 +813,7 @@ export default function Toolbar() {
       );
     } finally {
       setIsRenaming(false);
+      setFileOperationProgress(null);
     }
   };
 
@@ -761,14 +841,27 @@ export default function Toolbar() {
     );
   };
 
-  const selectedAnalyzableCount = files.filter(
-    (file) => file.selected && (file.status === 'pending' || file.status === 'failed')
+  const selectedAnalyzableCount = getSelectedAnalyzableFiles(
+    files,
+    selectedFileIds
   ).length;
-  const selectedExecutableCount = getSelectedExecutableFiles(files).length;
+  const selectedExecutableCount = getSelectedExecutableFiles(
+    files,
+    selectedFileIds
+  ).length;
   const conflictFileCount = files.filter((file) => file.status === 'conflict').length;
+  const selectedConflictCleanupCount = conflictCleanupPlan.filesToRemove.length;
   const isFileOperationRunning = isRenaming || isCleaningConflicts;
   const processedBatchCount =
     analysisProgress.completedBatches + analysisProgress.failedBatches;
+  const renameProgressLabel =
+    fileOperationProgress?.kind === 'rename'
+      ? `重命名中 ${fileOperationProgress.completed}/${fileOperationProgress.total}`
+      : null;
+  const conflictCleanupProgressLabel =
+    fileOperationProgress?.kind === 'conflict-cleanup'
+      ? `清理中 ${fileOperationProgress.completed}/${fileOperationProgress.total}`
+      : null;
 
   return (
     <>
@@ -831,16 +924,17 @@ export default function Toolbar() {
             }
           >
             {analysisProgress.isRunning
-              ? `${analysisProgress.isPaused ? '已暂停' : '分析中'} ${processedBatchCount}/${analysisProgress.totalBatches}`
+              ? `分析中 ${processedBatchCount}/${analysisProgress.totalBatches}`
               : `分析已选 (${selectedAnalyzableCount})`}
           </button>
 
           {analysisProgress.isRunning && (
             <button
               className="btn"
-              onClick={handleToggleAnalysisPause}
+              onClick={handlePauseAnalysis}
+              title="停止开始新的批次，并立即结束本次分析任务"
             >
-              {analysisProgress.isPaused ? '继续分析' : '暂停分析'}
+              暂停分析
             </button>
           )}
 
@@ -849,12 +943,16 @@ export default function Toolbar() {
               ref={conflictCleanupTriggerButtonRef}
               className="btn btn-warning"
               onClick={handleRequestConflictCleanup}
-              disabled={analysisProgress.isRunning || isFileOperationRunning}
-              title="每组保留一个体积最大的文件；大小相同时保留文件名排序靠前的一个，其余移入回收站"
+              disabled={
+                analysisProgress.isRunning
+                || isFileOperationRunning
+                || selectedConflictCleanupCount === 0
+              }
+              title="仅清理当前已选中的冲突项：每组保留体积最大的一个；大小相同时按文件名排序保留一个，其余移入回收站"
             >
               {isCleaningConflicts
-                ? '正在清理冲突...'
-                : `清理冲突 (${conflictCleanupPlan.filesToRemove.length})`}
+                ? (conflictCleanupProgressLabel ?? '正在清理冲突...')
+                : `清理已选冲突 (${selectedConflictCleanupCount})`}
             </button>
           )}
 
@@ -869,7 +967,7 @@ export default function Toolbar() {
             }
           >
             {isRenaming
-              ? '正在重命名...'
+              ? (renameProgressLabel ?? '正在重命名...')
               : `执行重命名 (${selectedExecutableCount})`}
           </button>
         </div>
@@ -957,9 +1055,9 @@ export default function Toolbar() {
           >
             <div className="operation-confirmation-header">
               <div>
-                <h2 id="conflict-cleanup-title">保留一个副本并清理冲突</h2>
+                <h2 id="conflict-cleanup-title">清理已选冲突</h2>
                 <p id="conflict-cleanup-description">
-                  每组保留体积最大的一个文件；若多个文件大小相同，则按原文件名排序保留其中一个，其余将移入系统回收站。
+                  仅处理当前已选中的冲突项。每组保留体积最大的一个文件；若多个文件大小相同，则按原文件名排序保留其中一个，其余将移入系统回收站。未选中的冲突会保留。
                 </p>
               </div>
             </div>
@@ -971,7 +1069,7 @@ export default function Toolbar() {
               </div>
               <div className="conflict-cleanup-summary-item is-removal">
                 <span>待删除文件</span>
-                <strong>{conflictCleanupPlan.filesToRemove.length}</strong>
+                <strong>{selectedConflictCleanupCount}</strong>
               </div>
             </div>
 
@@ -992,7 +1090,7 @@ export default function Toolbar() {
                 className="btn btn-danger"
                 onClick={handleExecuteConflictCleanup}
               >
-                移入回收站 {conflictCleanupPlan.filesToRemove.length} 个文件
+                移入回收站 {selectedConflictCleanupCount} 个文件
               </button>
             </div>
           </section>

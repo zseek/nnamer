@@ -167,8 +167,305 @@ function deriveFileStatusFromCounts(
   return 'ready';
 }
 
-export function getSelectedExecutableFiles(files: FileItem[]): FileItem[] {
-  return files.filter((file) => file.selected && file.status === 'ready');
+function getCanonicalNormalizedName(
+  file: Pick<FileItem, 'error' | 'normalizedName'>
+): string | null {
+  if (file.error || !file.normalizedName) {
+    return null;
+  }
+
+  return file.normalizedName.toLocaleLowerCase();
+}
+
+/**
+ * 编辑单个建议名后增量重算状态：只更新被编辑文件与其旧/新冲突组。
+ * 使用单次数组拷贝 + 受影响名计次，避免多次全表 map/扫描。
+ */
+export function applySuggestedNameEdit(
+  files: FileItem[],
+  fileId: string,
+  suggestedName: string,
+  validation: SuggestedNameValidation
+): FileItem[] {
+  const editedFileIndex = files.findIndex((file) => file.id === fileId);
+  if (editedFileIndex < 0) {
+    return files;
+  }
+
+  const previousFile = files[editedFileIndex];
+  const previousSuggestedName = previousFile.suggestedName ?? '';
+  const previousNormalizedName = previousFile.normalizedName;
+  const previousError = previousFile.error;
+  const previousCanonicalName = getCanonicalNormalizedName(previousFile);
+  const nextCanonicalName = validation.error || !validation.normalizedName
+    ? null
+    : validation.normalizedName.toLocaleLowerCase();
+
+  // 内容与校验结果都未变时直接跳过，避免无意义的全表拷贝与状态重算。
+  if (
+    previousSuggestedName === suggestedName
+    && previousNormalizedName === validation.normalizedName
+    && previousError === validation.error
+  ) {
+    return files;
+  }
+
+  const nextEditedFileBase: FileItem = {
+    ...previousFile,
+    suggestedName,
+    normalizedName: validation.normalizedName,
+    error: validation.error,
+    status: validation.error ? 'failed' : 'ready',
+  };
+
+  const affectedCanonicalNames = new Set<string>();
+  if (previousCanonicalName) {
+    affectedCanonicalNames.add(previousCanonicalName);
+  }
+  if (nextCanonicalName) {
+    affectedCanonicalNames.add(nextCanonicalName);
+  }
+
+  // 无冲突组牵连时：只替换被编辑项，其它对象引用保持不变。
+  if (affectedCanonicalNames.size === 0) {
+    const nextStatus = deriveFileStatusFromCounts(
+      nextEditedFileBase,
+      new Map()
+    );
+    if (
+      previousFile.suggestedName === nextEditedFileBase.suggestedName
+      && previousFile.normalizedName === nextEditedFileBase.normalizedName
+      && previousFile.error === nextEditedFileBase.error
+      && previousFile.status === nextStatus
+    ) {
+      return files;
+    }
+
+    const nextFiles = files.slice();
+    nextFiles[editedFileIndex] = {
+      ...nextEditedFileBase,
+      status: nextStatus,
+    };
+    return nextFiles;
+  }
+
+  const affectedNormalizedNameCounts = new Map<string, number>();
+  for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
+    const file = fileIndex === editedFileIndex
+      ? nextEditedFileBase
+      : files[fileIndex];
+    const canonicalName = getCanonicalNormalizedName(file);
+    if (!canonicalName || !affectedCanonicalNames.has(canonicalName)) {
+      continue;
+    }
+
+    affectedNormalizedNameCounts.set(
+      canonicalName,
+      (affectedNormalizedNameCounts.get(canonicalName) ?? 0) + 1
+    );
+  }
+
+  const nextFiles = files.slice();
+  let didMutateAnyFile = false;
+
+  for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
+    const currentFile = fileIndex === editedFileIndex
+      ? nextEditedFileBase
+      : files[fileIndex];
+    const canonicalName = getCanonicalNormalizedName(currentFile);
+    const isEditedFile = fileIndex === editedFileIndex;
+    const isAffectedConflictMember = Boolean(
+      canonicalName && affectedCanonicalNames.has(canonicalName)
+    );
+
+    if (!isEditedFile && !isAffectedConflictMember) {
+      continue;
+    }
+
+    const nextStatus = deriveFileStatusFromCounts(
+      currentFile,
+      affectedNormalizedNameCounts
+    );
+
+    if (isEditedFile) {
+      if (
+        previousFile.suggestedName === currentFile.suggestedName
+        && previousFile.normalizedName === currentFile.normalizedName
+        && previousFile.error === currentFile.error
+        && previousFile.status === nextStatus
+      ) {
+        continue;
+      }
+
+      nextFiles[fileIndex] = {
+        ...currentFile,
+        status: nextStatus,
+      };
+      didMutateAnyFile = true;
+      continue;
+    }
+
+    if (currentFile.status === nextStatus) {
+      continue;
+    }
+
+    nextFiles[fileIndex] = {
+      ...currentFile,
+      status: nextStatus,
+    };
+    didMutateAnyFile = true;
+  }
+
+  return didMutateAnyFile ? nextFiles : files;
+}
+
+/**
+ * 重置选中文件状态：清空建议名/错误，回到「待分析」；
+ * 并重算冲突组中未重置成员的状态。
+ * 分析中的条目也会被重置，且清除 analysisSessionId，避免稍后返回的分析结果覆盖。
+ */
+export function resetFileStatusesForFileIds(
+  files: FileItem[],
+  fileIds: ReadonlySet<string>
+): FileItem[] {
+  if (fileIds.size === 0) {
+    return files;
+  }
+
+  let didResetAnyFile = false;
+  const filesAfterReset = files.map((file) => {
+    if (!fileIds.has(file.id)) {
+      return file;
+    }
+
+    const isAlreadyPendingWithoutSuggestion =
+      file.status === 'pending'
+      && !file.suggestedName
+      && !file.normalizedName
+      && !file.error
+      && !file.analysisSessionId;
+
+    if (isAlreadyPendingWithoutSuggestion) {
+      return file;
+    }
+
+    didResetAnyFile = true;
+    return {
+      ...file,
+      suggestedName: undefined,
+      normalizedName: undefined,
+      error: undefined,
+      analysisSessionId: undefined,
+      status: 'pending' as const,
+    };
+  });
+
+  if (!didResetAnyFile) {
+    return files;
+  }
+
+  return recomputeFileStatuses(filesAfterReset);
+}
+
+/**
+ * 将选中文件的建议名设为原文件名（originalStem），再重算状态。
+ * 清除 error 与 analysisSessionId，避免旧错误或进行中的分析结果覆盖。
+ * 结果通常为「无需修改」或「已重命名」（若该文件曾改过盘上名），同名时也可能为「冲突」。
+ */
+export function keepOriginalNamesForFileIds(
+  files: FileItem[],
+  fileIds: ReadonlySet<string>
+): FileItem[] {
+  if (fileIds.size === 0) {
+    return files;
+  }
+
+  let didChangeAnyFile = false;
+  const filesAfterKeep = files.map((file) => {
+    if (!fileIds.has(file.id)) {
+      return file;
+    }
+
+    const nextSuggestedName = file.originalStem;
+    const validation = validateSuggestedName(nextSuggestedName);
+    const nextNormalizedName = validation.normalizedName;
+    const nextError = validation.error;
+
+    if (
+      file.suggestedName === nextSuggestedName
+      && file.normalizedName === nextNormalizedName
+      && file.error === nextError
+      && !file.analysisSessionId
+    ) {
+      return file;
+    }
+
+    didChangeAnyFile = true;
+    return {
+      ...file,
+      suggestedName: nextSuggestedName,
+      normalizedName: nextNormalizedName,
+      error: nextError,
+      analysisSessionId: undefined,
+      status: nextError ? ('failed' as const) : ('ready' as const),
+    };
+  });
+
+  if (!didChangeAnyFile) {
+    return files;
+  }
+
+  return recomputeFileStatuses(filesAfterKeep);
+}
+
+export function getSelectedExecutableFiles(
+  files: FileItem[],
+  selectedFileIds: ReadonlySet<string>
+): FileItem[] {
+  return files.filter(
+    (file) => selectedFileIds.has(file.id) && file.status === 'ready'
+  );
+}
+
+const reanalyzableFileStatuses = new Set<FileStatus>([
+  'pending',
+  'failed',
+  'ready',
+  'unchanged',
+  'conflict',
+  'renamed',
+]);
+
+export function isFileAnalyzable(file: Pick<FileItem, 'status'>): boolean {
+  return reanalyzableFileStatuses.has(file.status);
+}
+
+export function getSelectedAnalyzableFiles(
+  files: FileItem[],
+  selectedFileIds: ReadonlySet<string>
+): FileItem[] {
+  return files.filter(
+    (file) => selectedFileIds.has(file.id) && isFileAnalyzable(file)
+  );
+}
+
+/** 大批量磁盘操作时前端分片大小，便于展示进度并避免单次 IPC 过久无反馈。 */
+export const FILE_OPERATION_BATCH_SIZE = 200;
+
+export function chunkItems<T>(
+  items: ReadonlyArray<T>,
+  batchSize: number = FILE_OPERATION_BATCH_SIZE
+): T[][] {
+  if (batchSize <= 0) {
+    return [items.slice()];
+  }
+
+  const batches: T[][] = [];
+  for (let batchStart = 0; batchStart < items.length; batchStart += batchSize) {
+    batches.push(items.slice(batchStart, batchStart + batchSize));
+  }
+
+  return batches;
 }
 
 export function fileMatchesNameSearch(
@@ -233,7 +530,6 @@ export function applySuccessfulFileRenames(
       normalizedName: targetStem,
       error: undefined,
       status: 'renamed' as const,
-      selected: false,
       hasBeenRenamed: true,
     };
   });
@@ -320,10 +616,23 @@ export function groupFilesByConflict(files: FileItem[]): ConflictGroup[] {
   return conflictGroups;
 }
 
-export function createConflictCleanupPlan(files: FileItem[]): ConflictCleanupPlan {
+export function createConflictCleanupPlan(
+  files: FileItem[],
+  options: {
+    selectedOnly?: boolean;
+    selectedFileIds?: ReadonlySet<string>;
+  } = {}
+): ConflictCleanupPlan {
   const conflictGroups = groupFilesByConflict(
     files.filter(
-      (file) => file.status === 'conflict' && !file.error && file.normalizedName
+      (file) =>
+        file.status === 'conflict'
+        && !file.error
+        && file.normalizedName
+        && (
+          !options.selectedOnly
+          || (options.selectedFileIds?.has(file.id) ?? false)
+        )
     )
   );
   const resolvableGroups: ResolvableConflictGroup[] = [];

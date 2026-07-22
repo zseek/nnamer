@@ -4,13 +4,14 @@ export const MAX_ANALYSIS_LOG_SESSIONS = 20;
 
 export type AnalysisSessionStatus =
   | 'running'
-  | 'paused'
+  | 'stopped'
   | 'success'
   | 'partial'
   | 'failed';
 
 export type AnalysisBatchStatus =
   | 'pending'
+  | 'skipped'
   | 'running'
   | 'retrying'
   | 'success'
@@ -68,16 +69,10 @@ interface SessionStartedEvent {
   session: AnalysisSessionLog;
 }
 
-interface SessionStatusEvent {
-  type: 'session-status';
-  sessionId: string;
-  status: 'running' | 'paused';
-}
-
 interface SessionFinishedEvent {
   type: 'session-finished';
   sessionId: string;
-  status: 'success' | 'partial' | 'failed';
+  status: 'stopped' | 'success' | 'partial' | 'failed';
   finishedAt: number;
 }
 
@@ -101,10 +96,52 @@ interface BatchFinishedEvent {
 
 export type AnalysisLifecycleEvent =
   | SessionStartedEvent
-  | SessionStatusEvent
   | SessionFinishedEvent
   | BatchStartedEvent
   | BatchFinishedEvent;
+
+export interface AnalysisBatchClaim<T> {
+  batchIndex: number;
+  items: ReadonlyArray<T>;
+}
+
+export interface AnalysisBatchQueue<T> {
+  claimNextBatch: () => AnalysisBatchClaim<T> | null;
+  requestStop: () => void;
+  wasStopRequested: () => boolean;
+  getUnclaimedItems: () => T[];
+}
+
+export function createAnalysisBatchQueue<T>(
+  batches: ReadonlyArray<ReadonlyArray<T>>
+): AnalysisBatchQueue<T> {
+  let nextBatchIndex = 0;
+  let stopRequested = false;
+
+  return {
+    claimNextBatch: () => {
+      if (stopRequested || nextBatchIndex >= batches.length) {
+        return null;
+      }
+
+      const claimedBatchIndex = nextBatchIndex;
+      nextBatchIndex += 1;
+
+      return {
+        batchIndex: claimedBatchIndex,
+        items: batches[claimedBatchIndex],
+      };
+    },
+    requestStop: () => {
+      stopRequested = true;
+    },
+    wasStopRequested: () => stopRequested,
+    getUnclaimedItems: () =>
+      batches
+        .slice(nextBatchIndex)
+        .flatMap((batch) => [...batch]),
+  };
+}
 
 export function createAnalysisSessionLog(
   sessionId: string,
@@ -171,13 +208,18 @@ export function applyAnalysisLifecycleEvent(
     }
 
     switch (lifecycleEvent.type) {
-      case 'session-status':
-        return { ...session, status: lifecycleEvent.status };
       case 'session-finished':
         return {
           ...session,
           status: lifecycleEvent.status,
           finishedAt: lifecycleEvent.finishedAt,
+          batches: lifecycleEvent.status === 'stopped'
+            ? session.batches.map((batch) =>
+                batch.status === 'pending'
+                  ? { ...batch, status: 'skipped' as const }
+                  : batch
+              )
+            : session.batches,
         };
       case 'batch-started':
         return updateSessionBatch(

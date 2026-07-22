@@ -72,7 +72,7 @@ function getSessionStatusLabel(status: AnalysisSessionStatus): string {
   switch (status) {
     case 'running':
       return '分析中';
-    case 'paused':
+    case 'stopped':
       return '已暂停';
     case 'success':
       return '已完成';
@@ -87,6 +87,8 @@ function getBatchStatusLabel(status: AnalysisBatchStatus): string {
   switch (status) {
     case 'pending':
       return '等待中';
+    case 'skipped':
+      return '未分析';
     case 'running':
       return '请求中';
     case 'retrying':
@@ -130,11 +132,11 @@ function getStatusClassName(
     return 'is-running';
   }
 
-  if (status === 'paused' || status === 'partial') {
+  if (status === 'stopped' || status === 'partial') {
     return 'is-warning';
   }
 
-  if (status === 'pending') {
+  if (status === 'pending' || status === 'skipped') {
     return 'is-muted';
   }
 
@@ -381,10 +383,10 @@ export default function Logger({ isOpen, onClose }: LoggerProps) {
   }
 
   const hasActiveSession = sessions.some((session) =>
-    session.status === 'running' || session.status === 'paused'
+    session.status === 'running'
   );
   const completedBatchCount = selectedSession?.batches.filter((batch) =>
-    !['pending', 'running', 'retrying'].includes(batch.status)
+    !['pending', 'skipped', 'running', 'retrying'].includes(batch.status)
   ).length ?? 0;
   const failedBatchCount = selectedSession?.batches.filter((batch) =>
     failedBatchStatuses.has(batch.status)
@@ -448,7 +450,7 @@ export default function Logger({ isOpen, onClose }: LoggerProps) {
               sessions.map((session) => {
                 const isSelected = selectedSessionId === session.id;
                 const completedBatches = session.batches.filter((batch) =>
-                  !['pending', 'running', 'retrying'].includes(batch.status)
+                  !['pending', 'skipped', 'running', 'retrying'].includes(batch.status)
                 ).length;
                 const taskFailedBatchCount = session.batches.filter((batch) =>
                   failedBatchStatuses.has(batch.status)

@@ -6,12 +6,12 @@ import {
   SELECT_ALL_VISIBLE_FILES_EVENT,
 } from './DesktopInteractionLayer';
 import {
+  applySuggestedNameEdit,
   collectFileIdsLeavingStatusFilter,
   fileMatchesNameSearch,
   formatFileSize,
   getFileIdsInSelectionRange,
   getStatusLabel,
-  recomputeFileStatuses,
   stripTxtExtension,
   validateSuggestedName,
 } from './shared/lib/fileUtils';
@@ -124,11 +124,13 @@ const STATUS_CLASSES: Record<FileStatus, string> = {
 
 const FILE_ROW_HEIGHT_PIXELS = 40;
 const FILE_LIST_OVERSCAN_ROWS = 10;
-const SUGGESTED_NAME_COMMIT_DELAY_MILLISECONDS = 120;
+/** 输入防抖：连续打字时合并提交。失焦时会立即提交，不依赖此延迟。 */
+const SUGGESTED_NAME_COMMIT_DELAY_MILLISECONDS = 350;
 
 interface FileTableRowProps {
   file: FileItem;
   rowIndex: number;
+  isSelected: boolean;
   onSelectionChange: (
     fileId: string,
     isSelected: boolean,
@@ -141,6 +143,7 @@ interface FileTableRowProps {
 const FileTableRow = memo(function FileTableRow({
   file,
   rowIndex,
+  isSelected,
   onSelectionChange,
   onSelectionToggle,
   onSuggestedNameChange,
@@ -156,25 +159,48 @@ const FileTableRow = memo(function FileTableRow({
 
   useEffect(() => {
     const suggestedName = file.suggestedName ?? '';
-    setSuggestedNameInput(suggestedName);
-    latestSuggestedNameInputRef.current = suggestedName;
-    committedSuggestedNameInputRef.current = suggestedName;
-  }, [file.suggestedName]);
-
-  useEffect(() => () => {
-    if (suggestedNameCommitTimerRef.current) {
-      clearTimeout(suggestedNameCommitTimerRef.current);
-    }
-
+    // 用户正在本地编辑时，不要用 store 回写覆盖输入框（避免提交后光标跳动）。
     if (
       latestSuggestedNameInputRef.current
       !== committedSuggestedNameInputRef.current
     ) {
-      onSuggestedNameChange(file.id, latestSuggestedNameInputRef.current);
+      return;
+    }
+
+    if (suggestedNameInput === suggestedName) {
+      committedSuggestedNameInputRef.current = suggestedName;
+      return;
+    }
+
+    setSuggestedNameInput(suggestedName);
+    latestSuggestedNameInputRef.current = suggestedName;
+    committedSuggestedNameInputRef.current = suggestedName;
+  }, [file.suggestedName, suggestedNameInput]);
+
+  useEffect(() => () => {
+    if (suggestedNameCommitTimerRef.current) {
+      clearTimeout(suggestedNameCommitTimerRef.current);
+      suggestedNameCommitTimerRef.current = null;
+    }
+
+    // 卸载时若有未提交编辑，延后写入 store，避免与下一个输入框聚焦抢主线程。
+    if (
+      latestSuggestedNameInputRef.current
+      !== committedSuggestedNameInputRef.current
+    ) {
+      const pendingFileId = file.id;
+      const pendingInputValue = latestSuggestedNameInputRef.current;
+      committedSuggestedNameInputRef.current = pendingInputValue;
+      window.setTimeout(() => {
+        onSuggestedNameChange(pendingFileId, pendingInputValue);
+      }, 0);
     }
   }, [file.id, onSuggestedNameChange]);
 
-  const commitSuggestedName = (inputValue: string) => {
+  const commitSuggestedName = (
+    inputValue: string,
+    options?: { deferStoreUpdate?: boolean }
+  ) => {
     if (suggestedNameCommitTimerRef.current) {
       clearTimeout(suggestedNameCommitTimerRef.current);
       suggestedNameCommitTimerRef.current = null;
@@ -185,6 +211,15 @@ const FileTableRow = memo(function FileTableRow({
     }
 
     committedSuggestedNameInputRef.current = inputValue;
+
+    if (options?.deferStoreUpdate) {
+      // 失焦切到其它输入框时：先让焦点落位，再写 store，减轻卡顿感。
+      window.setTimeout(() => {
+        onSuggestedNameChange(file.id, inputValue);
+      }, 0);
+      return;
+    }
+
     onSuggestedNameChange(file.id, inputValue);
   };
 
@@ -237,7 +272,7 @@ const FileTableRow = memo(function FileTableRow({
     <tr
       data-file-row-id={file.id}
       aria-rowindex={rowIndex}
-      className={`file-row${file.selected ? ' is-selected' : ''}`}
+      className={`file-row${isSelected ? ' is-selected' : ''}`}
       onMouseDown={handleRowMouseDown}
       onClick={handleRowClick}
     >
@@ -247,7 +282,7 @@ const FileTableRow = memo(function FileTableRow({
           data-row-selection-excluded="true"
           type="checkbox"
           aria-label={`选择 ${file.originalStem}`}
-          checked={file.selected}
+          checked={isSelected}
           onChange={(event) =>
             onSelectionChange(
               file.id,
@@ -281,7 +316,9 @@ const FileTableRow = memo(function FileTableRow({
             title={file.error ?? file.suggestedName}
             spellCheck={false}
             autoComplete="off"
-            onBlur={() => commitSuggestedName(suggestedNameInput)}
+            onBlur={() =>
+              commitSuggestedName(suggestedNameInput, { deferStoreUpdate: true })
+            }
             onChange={(event) =>
               handleSuggestedNameInput(event.target.value)
             }
@@ -302,7 +339,14 @@ const FileTableRow = memo(function FileTableRow({
 });
 
 export default function FileList() {
-  const { currentDirectory, files, setFiles } = useAppStore();
+  const currentDirectory = useAppStore((state) => state.currentDirectory);
+  const files = useAppStore((state) => state.files);
+  const selectedFileIds = useAppStore((state) => state.selectedFileIds);
+  const setFiles = useAppStore((state) => state.setFiles);
+  const setFileSelected = useAppStore((state) => state.setFileSelected);
+  const toggleFileSelection = useAppStore((state) => state.toggleFileSelection);
+  const selectFileIds = useAppStore((state) => state.selectFileIds);
+  const setSelectedFileIds = useAppStore((state) => state.setSelectedFileIds);
   const [sortField, setSortField] = useState<SortField>(null);
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [activeStatusFilter, setActiveStatusFilter] = useState<StatusFilter>('all');
@@ -336,23 +380,35 @@ export default function FileList() {
     return counts;
   }, [files]);
 
-  const filteredFiles = useMemo(
-    () => files.filter(
-      (file) => (
-        activeStatusFilter === 'all'
-        || file.status === activeStatusFilter
-        || retainedEditedFileIds.has(file.id)
-      ) && fileMatchesNameSearch(file, searchQuery)
-    ),
-    [activeStatusFilter, files, retainedEditedFileIds, searchQuery]
-  );
+  const filteredFiles = useMemo(() => {
+    const normalizedSearchQuery = searchQuery.trim();
+    const hasStatusFilter = activeStatusFilter !== 'all';
+    const hasSearchFilter = normalizedSearchQuery.length > 0;
+    const hasRetainedEditedFiles = retainedEditedFileIds.size > 0;
 
-  const sortedFiles = useMemo(() => {
-    const filesToSort = [...filteredFiles];
-    if (!sortField) {
-      return filesToSort;
+    // 最常见路径：无筛选时直接复用原数组，避免 5 万级无意义 filter。
+    if (!hasStatusFilter && !hasSearchFilter && !hasRetainedEditedFiles) {
+      return files;
     }
 
+    return files.filter(
+      (file) => (
+        !hasStatusFilter
+        || file.status === activeStatusFilter
+        || retainedEditedFileIds.has(file.id)
+      ) && (
+        !hasSearchFilter
+        || fileMatchesNameSearch(file, searchQuery)
+      )
+    );
+  }, [activeStatusFilter, files, retainedEditedFileIds, searchQuery]);
+
+  const sortedFiles = useMemo(() => {
+    if (!sortField) {
+      return filteredFiles;
+    }
+
+    const filesToSort = [...filteredFiles];
     return filesToSort.sort((firstFile, secondFile) => {
       const firstValue = sortField === 'originalStem'
         ? firstFile.originalStem
@@ -385,9 +441,12 @@ export default function FileList() {
     ? fileVirtualizer.getTotalSize() - lastVirtualRow.end
     : 0;
 
-  const selectedFilteredCount = filteredFiles.reduce(
-    (selectedCount, file) => selectedCount + Number(file.selected),
-    0
+  const selectedFilteredCount = useMemo(
+    () => filteredFiles.reduce(
+      (selectedCount, file) => selectedCount + Number(selectedFileIds.has(file.id)),
+      0
+    ),
+    [filteredFiles, selectedFileIds]
   );
   const areAllFilteredFilesSelected =
     filteredFiles.length > 0 && selectedFilteredCount === filteredFiles.length;
@@ -410,17 +469,17 @@ export default function FileList() {
   }, [currentDirectory]);
 
   const handleSelectAll = useCallback((checked: boolean) => {
-    const filteredFileIds = new Set(filteredFiles.map((file) => file.id));
-    setFiles((currentFiles) =>
-      currentFiles.map((file) => {
-        if (!filteredFileIds.has(file.id) || file.selected === checked) {
-          return file;
-        }
+    if (checked) {
+      selectFileIds(filteredFiles.map((file) => file.id));
+      return;
+    }
 
-        return { ...file, selected: checked };
-      })
-    );
-  }, [filteredFiles, setFiles]);
+    const nextSelectedFileIds = new Set(selectedFileIds);
+    for (const file of filteredFiles) {
+      nextSelectedFileIds.delete(file.id);
+    }
+    setSelectedFileIds(nextSelectedFileIds);
+  }, [filteredFiles, selectFileIds, selectedFileIds, setSelectedFileIds]);
 
   useEffect(() => {
     if (selectAllCheckboxRef.current) {
@@ -489,16 +548,8 @@ export default function FileList() {
           selectionAnchorFileIdRef.current,
           fileId
         );
-        const selectedFileIds = new Set(
+        selectFileIds(
           selectionRangeFileIds.length > 0 ? selectionRangeFileIds : [fileId]
-        );
-
-        setFiles((currentFiles) =>
-          currentFiles.map((file) =>
-            selectedFileIds.has(file.id) && !file.selected
-              ? { ...file, selected: true }
-              : file
-          )
         );
         selectionAnchorFileIdRef.current =
           selectionRangeFileIds.length > 0 ? selectionAnchorFileIdRef.current : fileId;
@@ -506,17 +557,9 @@ export default function FileList() {
       }
 
       selectionAnchorFileIdRef.current = fileId;
-      setFiles((currentFiles) =>
-        currentFiles.map((file) => {
-          if (file.id !== fileId || file.selected === isSelected) {
-            return file;
-          }
-
-          return { ...file, selected: isSelected };
-        })
-      );
+      setFileSelected(fileId, isSelected);
     },
-    [setFiles]
+    [selectFileIds, setFileSelected]
   );
 
   const handleRowSelectionToggle = useCallback(
@@ -527,16 +570,8 @@ export default function FileList() {
           selectionAnchorFileIdRef.current,
           fileId
         );
-        const selectedFileIds = new Set(
+        selectFileIds(
           selectionRangeFileIds.length > 0 ? selectionRangeFileIds : [fileId]
-        );
-
-        setFiles((currentFiles) =>
-          currentFiles.map((file) =>
-            selectedFileIds.has(file.id) && !file.selected
-              ? { ...file, selected: true }
-              : file
-          )
         );
         selectionAnchorFileIdRef.current =
           selectionRangeFileIds.length > 0 ? selectionAnchorFileIdRef.current : fileId;
@@ -544,13 +579,9 @@ export default function FileList() {
       }
 
       selectionAnchorFileIdRef.current = fileId;
-      setFiles((currentFiles) =>
-        currentFiles.map((file) =>
-          file.id === fileId ? { ...file, selected: !file.selected } : file
-        )
-      );
+      toggleFileSelection(fileId);
     },
-    [setFiles]
+    [selectFileIds, toggleFileSelection]
   );
 
   const handleStatusFilterChange = (statusFilter: StatusFilter) => {
@@ -564,19 +595,12 @@ export default function FileList() {
       const suggestedName = stripTxtExtension(inputValue);
       const validation = validateSuggestedName(suggestedName);
       const currentFiles = useAppStore.getState().files;
-
-      const editedFiles = currentFiles.map((file) =>
-        file.id === fileId
-          ? {
-              ...file,
-              suggestedName,
-              normalizedName: validation.normalizedName,
-              error: validation.error,
-              status: validation.error ? 'failed' as const : 'ready' as const,
-            }
-          : file
+      const nextFiles = applySuggestedNameEdit(
+        currentFiles,
+        fileId,
+        suggestedName,
+        validation
       );
-      const nextFiles = recomputeFileStatuses(editedFiles);
 
       // 冲突等状态会级联变化：不仅保留被编辑行，也保留因本次编辑而离开当前筛选的行。
       // 先更新暂留集合，再写回文件列表，避免筛选列表闪一下。
@@ -794,6 +818,7 @@ export default function FileList() {
                   key={file.id}
                   file={file}
                   rowIndex={virtualRow.index + 2}
+                  isSelected={selectedFileIds.has(file.id)}
                   onSelectionChange={handleFileSelectionChange}
                   onSelectionToggle={handleRowSelectionToggle}
                   onSuggestedNameChange={handleSuggestedNameChange}

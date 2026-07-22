@@ -990,22 +990,12 @@
 }
 
 .permanent-delete-dialog {
-  width: min(500px, calc(100vw - 40px));
+  width: min(440px, calc(100vw - 40px));
 }
 
-.permanent-delete-file {
-  margin: 0 18px;
-  padding: 10px 12px;
-  overflow: hidden;
-  border: 1px solid hsl(var(--color-error) / 0.2);
-  border-radius: 5px;
+.permanent-delete-dialog .operation-confirmation-summary {
+  border-color: hsl(var(--color-error) / 0.22);
   background: hsl(var(--color-error) / 0.04);
-  color: hsl(var(--color-text));
-  font-family: Consolas, "Courier New", monospace;
-  font-size: 12px;
-  line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .permanent-delete-notice {
@@ -1589,6 +1579,12 @@
   color: hsl(var(--color-text));
   font-size: 12px;
   text-align: left;
+}
+
+.desktop-context-menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: hsl(var(--color-border));
 }
 
 .desktop-context-menu-item:hover:not(:disabled),

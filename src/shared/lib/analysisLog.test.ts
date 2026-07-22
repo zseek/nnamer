@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyAnalysisAttemptEvent,
   applyAnalysisLifecycleEvent,
+  createAnalysisBatchQueue,
   createAnalysisSessionLog,
 } from './analysisLog';
 
@@ -90,6 +91,51 @@ describe('analysis log aggregation', () => {
     expect(firstAttemptSessions[0].batches[0].status).toBe('retrying');
     expect(finishedSessions[0].batches[0].status).toBe('http_error');
     expect(finishedSessions[0].batches[0].attempts).toHaveLength(2);
+  });
+
+  it('stops assigning new batches while preserving unclaimed items', () => {
+    const analysisQueue = createAnalysisBatchQueue([
+      ['file-1', 'file-2'],
+      ['file-3'],
+      ['file-4', 'file-5'],
+    ]);
+
+    expect(analysisQueue.claimNextBatch()).toEqual({
+      batchIndex: 0,
+      items: ['file-1', 'file-2'],
+    });
+
+    analysisQueue.requestStop();
+
+    expect(analysisQueue.wasStopRequested()).toBe(true);
+    expect(analysisQueue.claimNextBatch()).toBeNull();
+    expect(analysisQueue.getUnclaimedItems()).toEqual([
+      'file-3',
+      'file-4',
+      'file-5',
+    ]);
+  });
+
+  it('marks pending batches as unanalysed when a session is stopped', () => {
+    const runningSessions = applyAnalysisLifecycleEvent(createStartedSession(), {
+      type: 'batch-started',
+      sessionId: 'session-1',
+      batchIndex: 0,
+      startedAt: 1100,
+    });
+    const stoppedSessions = applyAnalysisLifecycleEvent(runningSessions, {
+      type: 'session-finished',
+      sessionId: 'session-1',
+      status: 'stopped',
+      finishedAt: 1200,
+    });
+
+    expect(stoppedSessions[0].status).toBe('stopped');
+    expect(stoppedSessions[0].finishedAt).toBe(1200);
+    expect(stoppedSessions[0].batches.map((batch) => batch.status)).toEqual([
+      'running',
+      'skipped',
+    ]);
   });
 
   it('limits retained sessions to the most recent twenty tasks', () => {

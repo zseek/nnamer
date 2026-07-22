@@ -2,12 +2,17 @@ import { describe, expect, it } from 'vitest';
 import type { FileItem } from '../types';
 import {
   applySuccessfulFileRenames,
+  applySuggestedNameEdit,
+  chunkItems,
   collectFileIdsLeavingStatusFilter,
   createConflictCleanupPlan,
   fileMatchesNameSearch,
   getFileIdsInSelectionRange,
+  getSelectedAnalyzableFiles,
   getSelectedExecutableFiles,
+  keepOriginalNamesForFileIds,
   recomputeFileStatuses,
+  resetFileStatusesForFileIds,
   stripTxtExtension,
   validateSuggestedName,
 } from './fileUtils';
@@ -23,9 +28,12 @@ function createFile(
     sizeBytes: 1024,
     modifiedAt: 0,
     status: 'pending',
-    selected: false,
     ...overrides,
   };
+}
+
+function selectedIds(...ids: string[]): ReadonlySet<string> {
+  return new Set(ids);
 }
 
 describe('stripTxtExtension', () => {
@@ -55,25 +63,77 @@ describe('getSelectedExecutableFiles', () => {
   it('returns only selected files that are currently executable', () => {
     const files = [
       createFile('selected-ready', {
-        selected: true,
         status: 'ready',
       }),
       createFile('unselected-ready', {
-        selected: false,
         status: 'ready',
       }),
       createFile('selected-conflict', {
-        selected: true,
         status: 'conflict',
       }),
       createFile('selected-failed', {
-        selected: true,
         status: 'failed',
       }),
     ];
 
-    expect(getSelectedExecutableFiles(files).map((file) => file.id)).toEqual([
+    expect(
+      getSelectedExecutableFiles(
+        files,
+        selectedIds('selected-ready', 'selected-conflict', 'selected-failed')
+      ).map((file) => file.id)
+    ).toEqual(['selected-ready']);
+  });
+});
+
+describe('getSelectedAnalyzableFiles', () => {
+  it('allows re-analysis of completed results while excluding analyzing items', () => {
+    const files = [
+      createFile('selected-pending', {
+        status: 'pending',
+      }),
+      createFile('selected-ready', {
+        status: 'ready',
+      }),
+      createFile('selected-unchanged', {
+        status: 'unchanged',
+      }),
+      createFile('selected-conflict', {
+        status: 'conflict',
+      }),
+      createFile('selected-renamed', {
+        status: 'renamed',
+      }),
+      createFile('selected-failed', {
+        status: 'failed',
+      }),
+      createFile('selected-analyzing', {
+        status: 'analyzing',
+      }),
+      createFile('unselected-ready', {
+        status: 'ready',
+      }),
+    ];
+
+    expect(
+      getSelectedAnalyzableFiles(
+        files,
+        selectedIds(
+          'selected-pending',
+          'selected-ready',
+          'selected-unchanged',
+          'selected-conflict',
+          'selected-renamed',
+          'selected-failed',
+          'selected-analyzing'
+        )
+      ).map((file) => file.id)
+    ).toEqual([
+      'selected-pending',
       'selected-ready',
+      'selected-unchanged',
+      'selected-conflict',
+      'selected-renamed',
+      'selected-failed',
     ]);
   });
 });
@@ -138,7 +198,6 @@ describe('applySuccessfulFileRenames', () => {
       suggestedName: '新书名',
       normalizedName: '新书名',
       status: 'ready',
-      selected: true,
     });
     const unrelatedFile = createFile('unrelated', {
       originalStem: '另一文件',
@@ -159,7 +218,6 @@ describe('applySuccessfulFileRenames', () => {
       suggestedName: '新书名',
       normalizedName: '新书名',
       status: 'renamed',
-      selected: false,
       hasBeenRenamed: true,
     });
     expect(nextFiles[1]).toBe(unrelatedFile);
@@ -172,7 +230,6 @@ describe('applySuccessfulFileRenames', () => {
       suggestedName: '第二次书名',
       normalizedName: '第二次书名',
       status: 'ready',
-      selected: true,
       hasBeenRenamed: true,
     });
 
@@ -185,7 +242,6 @@ describe('applySuccessfulFileRenames', () => {
       originalName: '第二次书名.txt',
       originalStem: '第二次书名',
       status: 'renamed',
-      selected: false,
       hasBeenRenamed: true,
     });
   });
@@ -460,6 +516,57 @@ describe('createConflictCleanupPlan', () => {
     expect(cleanupPlan.skippedGroups).toHaveLength(0);
     expect(cleanupPlan.filesToRemove).toHaveLength(0);
   });
+
+  it('only cleans selected conflict members when selectedOnly is enabled', () => {
+    const files = [
+      createFile('selected-largest', {
+        originalName: '连载小说（600）.txt',
+        sizeBytes: 600,
+        suggestedName: '连载小说',
+        normalizedName: '连载小说',
+        status: 'conflict',
+      }),
+      createFile('selected-smaller', {
+        originalName: '连载小说（500）.txt',
+        sizeBytes: 500,
+        suggestedName: '连载小说',
+        normalizedName: '连载小说',
+        status: 'conflict',
+      }),
+      createFile('unselected-duplicate', {
+        originalName: '连载小说（550）.txt',
+        sizeBytes: 550,
+        suggestedName: '连载小说',
+        normalizedName: '连载小说',
+        status: 'conflict',
+      }),
+      createFile('other-group-a', {
+        originalName: '另一本书（300）.txt',
+        sizeBytes: 300,
+        suggestedName: '另一本书',
+        normalizedName: '另一本书',
+        status: 'conflict',
+      }),
+      createFile('other-group-b', {
+        originalName: '另一本书（200）.txt',
+        sizeBytes: 200,
+        suggestedName: '另一本书',
+        normalizedName: '另一本书',
+        status: 'conflict',
+      }),
+    ];
+
+    const cleanupPlan = createConflictCleanupPlan(files, {
+      selectedOnly: true,
+      selectedFileIds: selectedIds('selected-largest', 'selected-smaller'),
+    });
+
+    expect(cleanupPlan.resolvableGroups).toHaveLength(1);
+    expect(cleanupPlan.resolvableGroups[0].retainedFile.id).toBe('selected-largest');
+    expect(cleanupPlan.filesToRemove.map((file) => file.id)).toEqual([
+      'selected-smaller',
+    ]);
+  });
 });
 
 describe('recomputeFileStatuses', () => {
@@ -578,5 +685,226 @@ describe('recomputeFileStatuses', () => {
       'conflict',
       'conflict',
     ]);
+  });
+});
+
+describe('resetFileStatusesForFileIds', () => {
+  it('resets selected files back to pending and resolves freed conflict peers', () => {
+    const files = [
+      createFile('cleared', {
+        suggestedName: '相同书名',
+        normalizedName: '相同书名',
+        status: 'conflict',
+        error: '旧错误',
+        analysisSessionId: 'session-1',
+      }),
+      createFile('peer', {
+        suggestedName: '相同书名',
+        normalizedName: '相同书名',
+        status: 'conflict',
+      }),
+      createFile('unrelated', {
+        suggestedName: '另一书名',
+        normalizedName: '另一书名',
+        status: 'ready',
+      }),
+    ];
+
+    const nextFiles = resetFileStatusesForFileIds(files, new Set(['cleared']));
+
+    expect(nextFiles[0]).toMatchObject({
+      id: 'cleared',
+      status: 'pending',
+      suggestedName: undefined,
+      normalizedName: undefined,
+      error: undefined,
+      analysisSessionId: undefined,
+    });
+    expect(nextFiles[1]).toMatchObject({
+      id: 'peer',
+      status: 'ready',
+      suggestedName: '相同书名',
+    });
+    expect(nextFiles[2]).toBe(files[2]);
+  });
+
+  it('returns the same array when selected files are already pending', () => {
+    const files = [
+      createFile('already-pending', {
+        status: 'pending',
+      }),
+    ];
+
+    expect(resetFileStatusesForFileIds(files, new Set(['already-pending']))).toBe(
+      files
+    );
+  });
+
+  it('keeps hasBeenRenamed when resetting a renamed file', () => {
+    const files = [
+      createFile('renamed', {
+        originalStem: '已改名',
+        suggestedName: '已改名',
+        normalizedName: '已改名',
+        status: 'renamed',
+        hasBeenRenamed: true,
+      }),
+    ];
+
+    const nextFiles = resetFileStatusesForFileIds(files, new Set(['renamed']));
+
+    expect(nextFiles[0]).toMatchObject({
+      status: 'pending',
+      hasBeenRenamed: true,
+      suggestedName: undefined,
+    });
+  });
+});
+
+describe('keepOriginalNamesForFileIds', () => {
+  it('sets suggested names to original stems and marks unchanged', () => {
+    const files = [
+      createFile('keep', {
+        originalStem: '原书名',
+        suggestedName: '新书名',
+        normalizedName: '新书名',
+        status: 'ready',
+      }),
+      createFile('unrelated', {
+        originalStem: '其它',
+        suggestedName: '其它建议',
+        normalizedName: '其它建议',
+        status: 'ready',
+      }),
+    ];
+
+    const nextFiles = keepOriginalNamesForFileIds(files, new Set(['keep']));
+
+    expect(nextFiles[0]).toMatchObject({
+      id: 'keep',
+      suggestedName: '原书名',
+      normalizedName: '原书名',
+      status: 'unchanged',
+      error: undefined,
+    });
+    expect(nextFiles[1]).toBe(files[1]);
+  });
+
+  it('marks hasBeenRenamed files as renamed when keeping original name', () => {
+    const files = [
+      createFile('renamed', {
+        originalStem: '盘上名',
+        suggestedName: 'LLM建议',
+        normalizedName: 'LLM建议',
+        status: 'ready',
+        hasBeenRenamed: true,
+      }),
+    ];
+
+    const nextFiles = keepOriginalNamesForFileIds(files, new Set(['renamed']));
+
+    expect(nextFiles[0]).toMatchObject({
+      suggestedName: '盘上名',
+      status: 'renamed',
+      hasBeenRenamed: true,
+    });
+  });
+
+  it('returns the same array when suggestions already match original names', () => {
+    const files = [
+      createFile('same', {
+        originalStem: '原书名',
+        suggestedName: '原书名',
+        normalizedName: '原书名',
+        status: 'unchanged',
+      }),
+    ];
+
+    expect(keepOriginalNamesForFileIds(files, new Set(['same']))).toBe(files);
+  });
+});
+
+describe('applySuggestedNameEdit', () => {
+  it('only updates the edited file and members of affected conflict groups', () => {
+    const files = [
+      createFile('edited', {
+        suggestedName: '书名甲',
+        normalizedName: '书名甲',
+        status: 'ready',
+      }),
+      createFile('peer', {
+        suggestedName: '书名乙',
+        normalizedName: '书名乙',
+        status: 'ready',
+      }),
+      createFile('unrelated', {
+        suggestedName: '书名丙',
+        normalizedName: '书名丙',
+        status: 'ready',
+      }),
+    ];
+
+    const nextFiles = applySuggestedNameEdit(
+      files,
+      'edited',
+      '书名乙',
+      { normalizedName: '书名乙' }
+    );
+
+    expect(nextFiles[0].status).toBe('conflict');
+    expect(nextFiles[1].status).toBe('conflict');
+    expect(nextFiles[2]).toBe(files[2]);
+  });
+
+  it('returns the same array reference when the suggested name is unchanged', () => {
+    const files = [
+      createFile('edited', {
+        suggestedName: '书名甲',
+        normalizedName: '书名甲',
+        status: 'ready',
+      }),
+    ];
+
+    const nextFiles = applySuggestedNameEdit(
+      files,
+      'edited',
+      '书名甲',
+      { normalizedName: '书名甲' }
+    );
+
+    expect(nextFiles).toBe(files);
+  });
+
+  it('keeps unrelated file object identity when only the edited name changes', () => {
+    const files = [
+      createFile('edited', {
+        suggestedName: '书名甲',
+        normalizedName: '书名甲',
+        status: 'ready',
+      }),
+      createFile('unrelated', {
+        suggestedName: '书名丙',
+        normalizedName: '书名丙',
+        status: 'ready',
+      }),
+    ];
+
+    const nextFiles = applySuggestedNameEdit(
+      files,
+      'edited',
+      '书名丁',
+      { normalizedName: '书名丁' }
+    );
+
+    expect(nextFiles[0].suggestedName).toBe('书名丁');
+    expect(nextFiles[0].status).toBe('ready');
+    expect(nextFiles[1]).toBe(files[1]);
+  });
+});
+
+describe('chunkItems', () => {
+  it('splits items into fixed-size batches', () => {
+    expect(chunkItems([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
+    expect(chunkItems([], 2)).toEqual([]);
   });
 });

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAppStore } from './store';
-import { moveFileToRecycleBin } from './shared/lib/api';
-import { recomputeFileStatuses } from './shared/lib/fileUtils';
+import { moveFilesToRecycleBin } from './shared/lib/api';
+import { chunkItems, keepOriginalNamesForFileIds, recomputeFileStatuses, resetFileStatusesForFileIds } from './shared/lib/fileUtils';
 import type { FileItem } from './shared/types';
 
 export const OPEN_FILE_SEARCH_EVENT = 'nnamer:open-file-search';
@@ -14,7 +14,7 @@ interface ContextMenuState {
 }
 
 interface DeleteNotification {
-  tone: 'success' | 'error';
+  tone: 'success' | 'error' | 'warning';
   title: string;
   message: string;
   detail?: string;
@@ -97,11 +97,18 @@ function formatExecutionError(error: unknown): string {
 }
 
 export default function DesktopInteractionLayer() {
-  const { currentDirectory, setFiles } = useAppStore();
+  const currentDirectory = useAppStore((state) => state.currentDirectory);
+  const selectedFileIds = useAppStore((state) => state.selectedFileIds);
+  const setFiles = useAppStore((state) => state.setFiles);
+  const clearSelectionForIds = useAppStore((state) => state.clearSelectionForIds);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [filePendingDeletion, setFilePendingDeletion] = useState<FileItem | null>(null);
-  const [isDeletingFile, setIsDeletingFile] = useState(false);
-  const [deleteNotification, setDeleteNotification] = useState<DeleteNotification | null>(null);
+  const [filesPendingDeletion, setFilesPendingDeletion] = useState<FileItem[] | null>(
+    null
+  );
+  const [isDeletingFiles, setIsDeletingFiles] = useState(false);
+  const [deleteNotification, setDeleteNotification] = useState<DeleteNotification | null>(
+    null
+  );
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const deleteDialogRef = useRef<HTMLElement>(null);
   const cancelDeleteButtonRef = useRef<HTMLButtonElement>(null);
@@ -209,6 +216,12 @@ export default function DesktopInteractionLayer() {
         return;
       }
 
+      const storeState = useAppStore.getState();
+      // 右键同左键：确保当前行被勾选，再统一按“删除全部已选”处理。
+      if (!storeState.selectedFileIds.has(fileId)) {
+        storeState.selectFileIds([fileId]);
+      }
+
       setContextMenu({
         fileId,
         x: event.clientX,
@@ -292,16 +305,16 @@ export default function DesktopInteractionLayer() {
   }, [contextMenu]);
 
   useEffect(() => {
-    if (!filePendingDeletion) {
+    if (!filesPendingDeletion) {
       return;
     }
 
     cancelDeleteButtonRef.current?.focus({ preventScroll: true });
 
     const handleDeleteDialogKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !isDeletingFile) {
+      if (event.key === 'Escape' && !isDeletingFiles) {
         event.preventDefault();
-        setFilePendingDeletion(null);
+        setFilesPendingDeletion(null);
         return;
       }
 
@@ -331,81 +344,109 @@ export default function DesktopInteractionLayer() {
 
     window.addEventListener('keydown', handleDeleteDialogKeyDown);
     return () => window.removeEventListener('keydown', handleDeleteDialogKeyDown);
-  }, [filePendingDeletion, isDeletingFile]);
+  }, [filesPendingDeletion, isDeletingFiles]);
 
-  const handleRequestFileDeletion = () => {
-    if (!contextMenu) {
-      return;
+  const collectSelectedFilesForDeletion = (): FileItem[] => {
+    const currentSelectedFileIds = useAppStore.getState().selectedFileIds;
+    if (currentSelectedFileIds.size === 0) {
+      return [];
     }
 
-    const targetFile = useAppStore.getState().files.find(
-      (file) => file.id === contextMenu.fileId
-    );
-    setContextMenu(null);
-
-    if (!targetFile || !currentDirectory) {
-      displayDeleteNotification(
-        {
-          tone: 'error',
-          title: '无法删除文件',
-          message: '文件或当前目录已经发生变化，请重新右键选择后再试。',
-        },
-        6000
-      );
-      return;
-    }
-
-    dismissDeleteNotification();
-    setFilePendingDeletion(targetFile);
+    return useAppStore
+      .getState()
+      .files
+      .filter((file) => currentSelectedFileIds.has(file.id));
   };
 
-  const handleConfirmFileDeletion = async () => {
-    if (!filePendingDeletion || !currentDirectory || isDeletingFile) {
+  const executeFileDeletion = async (filesToDelete: FileItem[]) => {
+    if (!currentDirectory || filesToDelete.length === 0 || isDeletingFiles) {
       return;
     }
 
-    const latestFile = useAppStore.getState().files.find(
-      (file) => file.id === filePendingDeletion.id
-    );
-    if (!latestFile) {
-      setFilePendingDeletion(null);
-      displayDeleteNotification(
-        {
-          tone: 'error',
-          title: '文件已不在列表中',
-          message: '没有执行磁盘删除操作。',
-        },
-        6000
-      );
-      return;
-    }
+    setIsDeletingFiles(true);
+    dismissDeleteNotification();
 
-    setIsDeletingFile(true);
+    let successfulCount = 0;
+    let failureCount = 0;
+    let firstFailureDetail: string | undefined;
+
     try {
-      const result = await moveFileToRecycleBin(currentDirectory, {
-        fileId: latestFile.id,
-        originalName: latestFile.originalName,
-        sizeBytes: latestFile.sizeBytes,
-        modifiedAt: latestFile.modifiedAt,
-      });
+      const operationBatches = chunkItems(
+        filesToDelete.map((file) => ({
+          fileId: file.id,
+          originalName: file.originalName,
+          sizeBytes: file.sizeBytes,
+          modifiedAt: file.modifiedAt,
+        }))
+      );
 
-      if (!result.success) {
-        throw new Error(result.error ?? '后端未能删除文件');
+      for (const operationBatch of operationBatches) {
+        const results = await moveFilesToRecycleBin(currentDirectory, operationBatch);
+        const candidateFileIds = new Set(
+          operationBatch.map((operation) => operation.fileId)
+        );
+        const batchSuccessfulFileIds = new Set(
+          results
+            .filter(
+              (result) => result.success && candidateFileIds.has(result.fileId)
+            )
+            .map((result) => result.fileId)
+        );
+        const batchFailedResults = results.filter((result) => !result.success);
+        const batchFailureCount = Math.max(
+          0,
+          operationBatch.length - batchSuccessfulFileIds.size
+        );
+
+        if (batchSuccessfulFileIds.size > 0) {
+          setFiles((currentFiles) =>
+            recomputeFileStatuses(
+              currentFiles.filter((file) => !batchSuccessfulFileIds.has(file.id))
+            )
+          );
+          clearSelectionForIds(batchSuccessfulFileIds);
+        }
+
+        successfulCount += batchSuccessfulFileIds.size;
+        failureCount += batchFailureCount;
+
+        if (!firstFailureDetail && batchFailedResults[0]) {
+          const firstFailure = batchFailedResults[0];
+          const failedFileName =
+            filesToDelete.find((file) => file.id === firstFailure.fileId)
+              ?.originalName
+            ?? firstFailure.fileId;
+          firstFailureDetail = `${failedFileName}：${
+            firstFailure.error ?? '未知错误'
+          }`;
+        }
       }
 
-      setFiles((currentFiles) =>
-        recomputeFileStatuses(
-          currentFiles.filter((file) => file.id !== latestFile.id)
-        )
-      );
-      setFilePendingDeletion(null);
+      setFilesPendingDeletion(null);
+
+      if (failureCount === 0) {
+        displayDeleteNotification(
+          {
+            tone: 'success',
+            title: '文件已移入回收站',
+            message:
+              successfulCount === 1
+                ? `${filesToDelete[0]?.originalName ?? '1 个文件'} 已移入系统回收站，并从列表中移除。`
+                : `已将 ${successfulCount} 个文件移入系统回收站，并从列表中移除。`,
+          },
+          5000
+        );
+        return;
+      }
+
       displayDeleteNotification(
         {
-          tone: 'success',
-            title: '文件已移入回收站',
-          message: `${latestFile.originalName} 已移入系统回收站，并从列表中移除。`,
+          tone: successfulCount > 0 ? 'warning' : 'error',
+          title: successfulCount > 0 ? '部分文件未能删除' : '删除文件失败',
+          message: `已移入回收站 ${successfulCount} 个，失败 ${failureCount} 个。失败项目仍保留在列表中。`,
+          detail: firstFailureDetail,
         },
-        5000
+        9000
       );
     } catch (error) {
       displayDeleteNotification(
@@ -418,15 +459,171 @@ export default function DesktopInteractionLayer() {
         9000
       );
     } finally {
-      setIsDeletingFile(false);
+      setIsDeletingFiles(false);
     }
   };
 
+  const handleRequestFileDeletion = () => {
+    if (!contextMenu) {
+      return;
+    }
+
+    setContextMenu(null);
+    const targetFiles = collectSelectedFilesForDeletion();
+
+    if (targetFiles.length === 0 || !currentDirectory) {
+      displayDeleteNotification(
+        {
+          tone: 'error',
+          title: '无法删除文件',
+          message: '没有已选中的文件，或当前目录已经发生变化。',
+        },
+        6000
+      );
+      return;
+    }
+
+    // 单个目标：静默移入回收站，不弹确认框。
+    if (targetFiles.length === 1) {
+      void executeFileDeletion(targetFiles);
+      return;
+    }
+
+    // 多个目标：弹窗确认后再删除。
+    dismissDeleteNotification();
+    setFilesPendingDeletion(targetFiles);
+  };
+
+  const handleResetSelectedFileStatuses = () => {
+    if (!contextMenu) {
+      return;
+    }
+
+    setContextMenu(null);
+    const selectedIds = useAppStore.getState().selectedFileIds;
+    if (selectedIds.size === 0) {
+      displayDeleteNotification(
+        {
+          tone: 'error',
+          title: '无法重置状态',
+          message: '没有已选中的文件。',
+        },
+        5000
+      );
+      return;
+    }
+
+    const previousFiles = useAppStore.getState().files;
+    const nextFiles = resetFileStatusesForFileIds(previousFiles, selectedIds);
+    if (nextFiles === previousFiles) {
+      displayDeleteNotification(
+        {
+          tone: 'success',
+          title: '无需重置',
+          message: '已选文件均已是待分析状态。',
+        },
+        4000
+      );
+      return;
+    }
+
+    setFiles(nextFiles);
+    displayDeleteNotification(
+      {
+        tone: 'success',
+        title: '已重置状态',
+        message:
+          selectedIds.size === 1
+            ? '该文件已回到待分析状态。'
+            : `已将 ${selectedIds.size} 个已选文件重置为待分析。`,
+      },
+      4500
+    );
+  };
+
+  const handleKeepSelectedOriginalNames = () => {
+    if (!contextMenu) {
+      return;
+    }
+
+    setContextMenu(null);
+    const selectedIds = useAppStore.getState().selectedFileIds;
+    if (selectedIds.size === 0) {
+      displayDeleteNotification(
+        {
+          tone: 'error',
+          title: '无法保持文件名',
+          message: '没有已选中的文件。',
+        },
+        5000
+      );
+      return;
+    }
+
+    const previousFiles = useAppStore.getState().files;
+    const nextFiles = keepOriginalNamesForFileIds(previousFiles, selectedIds);
+    if (nextFiles === previousFiles) {
+      displayDeleteNotification(
+        {
+          tone: 'success',
+          title: '无需更改',
+          message: '已选文件的建议名均已与原文件名一致。',
+        },
+        4000
+      );
+      return;
+    }
+
+    setFiles(nextFiles);
+    displayDeleteNotification(
+      {
+        tone: 'success',
+        title: '已保持文件名',
+        message:
+          selectedIds.size === 1
+            ? '已将该文件的建议名设为原文件名。'
+            : `已将 ${selectedIds.size} 个已选文件的建议名设为原文件名。`,
+      },
+      4500
+    );
+  };
+
+  const handleConfirmFileDeletion = () => {
+    if (!filesPendingDeletion || filesPendingDeletion.length === 0) {
+      return;
+    }
+
+    // 以打开确认框时快照的目标为准，避免确认过程中选中状态被其它操作改动。
+    const pendingFileIdSet = new Set(filesPendingDeletion.map((file) => file.id));
+    const latestTargetFiles = useAppStore
+      .getState()
+      .files
+      .filter((file) => pendingFileIdSet.has(file.id));
+
+    if (latestTargetFiles.length === 0) {
+      setFilesPendingDeletion(null);
+      displayDeleteNotification(
+        {
+          tone: 'error',
+          title: '文件已不在列表中',
+          message: '没有执行磁盘删除操作。',
+        },
+        6000
+      );
+      return;
+    }
+
+    void executeFileDeletion(latestTargetFiles);
+  };
+
   const handleDeleteOverlayMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (event.target === event.currentTarget && !isDeletingFile) {
-      setFilePendingDeletion(null);
+    if (event.target === event.currentTarget && !isDeletingFiles) {
+      setFilesPendingDeletion(null);
     }
   };
+
+  const selectedDeletionCount = selectedFileIds.size;
+  const pendingDeletionCount = filesPendingDeletion?.length ?? 0;
 
   return (
     <>
@@ -442,16 +639,39 @@ export default function DesktopInteractionLayer() {
         >
           <button
             type="button"
+            className="desktop-context-menu-item"
+            role="menuitem"
+            onClick={handleKeepSelectedOriginalNames}
+          >
+            {selectedDeletionCount > 1
+              ? `保持文件名 (${selectedDeletionCount})`
+              : '保持文件名'}
+          </button>
+          <button
+            type="button"
+            className="desktop-context-menu-item"
+            role="menuitem"
+            onClick={handleResetSelectedFileStatuses}
+          >
+            {selectedDeletionCount > 1
+              ? `重置状态 (${selectedDeletionCount})`
+              : '重置状态'}
+          </button>
+          <div className="desktop-context-menu-separator" role="separator" />
+          <button
+            type="button"
             className="desktop-context-menu-item desktop-context-menu-item-danger"
             role="menuitem"
             onClick={handleRequestFileDeletion}
           >
-            删除文件
+            {selectedDeletionCount > 1
+              ? `删除已选 (${selectedDeletionCount})`
+              : '删除已选'}
           </button>
         </div>
       )}
 
-      {filePendingDeletion && (
+      {filesPendingDeletion && filesPendingDeletion.length > 1 && (
         <div
           className="operation-confirmation-backdrop"
           onMouseDown={handleDeleteOverlayMouseDown}
@@ -467,16 +687,18 @@ export default function DesktopInteractionLayer() {
             <header className="operation-confirmation-header">
               <h2 id="permanent-delete-title">移入回收站？</h2>
               <p id="permanent-delete-description">
-                文件会移动到系统回收站，之后仍可从回收站恢复。
+                将把当前已选中的 {pendingDeletionCount} 个文件移入系统回收站，之后仍可从回收站恢复。
               </p>
             </header>
 
-            <div className="permanent-delete-file selectable-text" title={filePendingDeletion.originalName}>
-              {filePendingDeletion.originalName}
+            <div className="operation-confirmation-summary">
+              <span>待删除文件</span>
+              <strong>{pendingDeletionCount}</strong>
+              <span>个</span>
             </div>
 
             <p className="operation-confirmation-notice permanent-delete-notice">
-              文件将移动到系统回收站。仅处理当前右键指向的这个文件，其他已勾选文件不会受影响。
+              仅处理当前已勾选的文件；未勾选的文件不会受影响。
             </p>
 
             <div className="operation-confirmation-actions">
@@ -484,18 +706,20 @@ export default function DesktopInteractionLayer() {
                 ref={cancelDeleteButtonRef}
                 type="button"
                 className="btn"
-                disabled={isDeletingFile}
-                onClick={() => setFilePendingDeletion(null)}
+                disabled={isDeletingFiles}
+                onClick={() => setFilesPendingDeletion(null)}
               >
                 取消
               </button>
               <button
                 type="button"
                 className="btn btn-danger"
-                disabled={isDeletingFile}
+                disabled={isDeletingFiles}
                 onClick={handleConfirmFileDeletion}
               >
-                {isDeletingFile ? '正在移入回收站…' : '移入回收站'}
+                {isDeletingFiles
+                  ? '正在移入回收站…'
+                  : `移入回收站 ${pendingDeletionCount} 个`}
               </button>
             </div>
           </section>

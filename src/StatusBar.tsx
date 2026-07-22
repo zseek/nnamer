@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useAppStore } from './store';
 import type { FileStatus } from './shared/types';
 
@@ -23,37 +24,55 @@ const STATUS_LABELS: Record<FileStatus, string> = {
 };
 
 const ATTENTION_STATUSES = new Set<FileStatus>(['conflict', 'failed']);
+const ALL_FILE_STATUSES = Object.keys(STATUS_LABELS) as FileStatus[];
 
 export default function StatusBar() {
-  const { files } = useAppStore();
-  const statusCounts: Record<FileStatus, number> = {
-    pending: 0,
-    analyzing: 0,
-    ready: 0,
-    unchanged: 0,
-    renamed: 0,
-    conflict: 0,
-    failed: 0,
-  };
+  const files = useAppStore((state) => state.files);
+  const selectedCount = useAppStore((state) => state.selectedFileIds.size);
+  const fileOperationProgress = useAppStore((state) => state.fileOperationProgress);
 
-  for (const file of files) {
-    statusCounts[file.status] += 1;
-  }
+  const statusCounts = useMemo(() => {
+    const counts: Record<FileStatus, number> = {
+      pending: 0,
+      analyzing: 0,
+      ready: 0,
+      unchanged: 0,
+      renamed: 0,
+      conflict: 0,
+      failed: 0,
+    };
 
-  const selectedCount = files.reduce(
-    (count, file) => count + Number(file.selected),
-    0
-  );
+    for (const file of files) {
+      counts[file.status] += 1;
+    }
+
+    return counts;
+  }, [files]);
 
   if (files.length === 0) {
     return <div style={styles}>准备就绪</div>;
   }
 
+  const operationLabel =
+    fileOperationProgress?.kind === 'rename'
+      ? '重命名'
+      : fileOperationProgress?.kind === 'conflict-cleanup'
+        ? '清理冲突'
+        : null;
+
   return (
     <div style={styles}>
       <span>总计: {files.length}</span>
       <span>已选: {selectedCount}</span>
-      {(Object.keys(statusCounts) as FileStatus[]).map((status) =>
+      {fileOperationProgress && operationLabel && (
+        <span style={{ color: 'hsl(var(--color-primary))' }}>
+          {operationLabel}: {fileOperationProgress.completed}/{fileOperationProgress.total}
+          {fileOperationProgress.failed > 0
+            ? `（失败 ${fileOperationProgress.failed}）`
+            : ''}
+        </span>
+      )}
+      {ALL_FILE_STATUSES.map((status) =>
         statusCounts[status] > 0 ? (
           <span
             key={status}

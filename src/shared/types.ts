@@ -42,6 +42,12 @@ export interface FileItem {
   error?: string;
 }
 
+export interface PromptProfile {
+  id: string;
+  name: string;
+  content: string;
+}
+
 export interface AppSettings {
   baseUrl: string;
   apiKey: string;
@@ -51,6 +57,8 @@ export interface AppSettings {
   maxRetries: number;
   concurrency: number;
   prompt: string;
+  promptProfiles: PromptProfile[];
+  activePromptId: string;
 }
 
 export interface RecycleBinOperation {

@@ -1,6 +1,6 @@
 [package]
 name = "nnamer"
-version = "1.0.3"
+version = "1.0.4"
 description = "TXT 小说批量智能命名工具"
 authors = ["you"]
 edition = "2021"

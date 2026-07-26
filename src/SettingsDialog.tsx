@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useAppStore } from './store';
 import { saveSettings } from './shared/lib/api';
-import type { AppSettings } from './shared/types';
+import type { AppSettings, PromptProfile } from './shared/types';
 
 const styles: { [key: string]: React.CSSProperties } = {
   overlay: {
     position: 'fixed',
     inset: 0,
+    padding: '20px',
     background: 'rgba(15, 23, 42, 0.48)',
     display: 'flex',
     alignItems: 'center',
@@ -14,9 +15,9 @@ const styles: { [key: string]: React.CSSProperties } = {
     zIndex: 1000,
   },
   dialog: {
-    width: '760px',
-    maxWidth: 'calc(100vw - 32px)',
-    maxHeight: '88vh',
+    width: 'min(1080px, calc(100vw - 40px))',
+    height: 'min(720px, calc(100vh - 40px))',
+    minHeight: '420px',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
@@ -34,6 +35,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   content: {
     minHeight: 0,
+    flex: 1,
     padding: '16px 18px',
     overflowY: 'auto',
   },
@@ -117,6 +119,62 @@ const DEFAULT_PROMPT = `你是一个专业的文件名识别工具。你的任�
   {"id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "suggested_name": "斗破苍穹"}
 ]`;
 
+const DEFAULT_PROMPT_PROFILE_ID = 'default';
+const DEFAULT_PROMPT_PROFILE_NAME = '小说书名识别';
+
+function createDefaultPromptProfile(): PromptProfile {
+  return {
+    id: DEFAULT_PROMPT_PROFILE_ID,
+    name: DEFAULT_PROMPT_PROFILE_NAME,
+    content: DEFAULT_PROMPT,
+  };
+}
+
+function createInitialSettings(): AppSettings {
+  const defaultPromptProfile = createDefaultPromptProfile();
+
+  return {
+    baseUrl: '',
+    apiKey: '',
+    model: 'gpt-4o-mini',
+    prompt: defaultPromptProfile.content,
+    promptProfiles: [defaultPromptProfile],
+    activePromptId: defaultPromptProfile.id,
+    batchSize: 15,
+    timeoutSeconds: 60,
+    maxRetries: 2,
+    concurrency: 3,
+  };
+}
+
+function normalizePromptProfiles(settings: AppSettings): AppSettings {
+  const promptProfiles = settings.promptProfiles ?? [];
+  if (promptProfiles.length === 0) {
+    const migratedPromptProfile: PromptProfile = {
+      id: DEFAULT_PROMPT_PROFILE_ID,
+      name: DEFAULT_PROMPT_PROFILE_NAME,
+      content: settings.prompt || DEFAULT_PROMPT,
+    };
+
+    return {
+      ...settings,
+      prompt: migratedPromptProfile.content,
+      promptProfiles: [migratedPromptProfile],
+      activePromptId: migratedPromptProfile.id,
+    };
+  }
+
+  const activePromptProfile = promptProfiles.find(
+    (promptProfile) => promptProfile.id === settings.activePromptId
+  ) ?? promptProfiles[0];
+
+  return {
+    ...settings,
+    prompt: activePromptProfile.content,
+    activePromptId: activePromptProfile.id,
+  };
+}
+
 export default function SettingsDialog({
   isOpen,
   onClose,
@@ -124,27 +182,105 @@ export default function SettingsDialog({
   onSaveError,
 }: SettingsDialogProps) {
   const { settings, setSettings } = useAppStore();
-  const [formData, setFormData] = useState<AppSettings>(
-    settings || {
-      baseUrl: '',
-      apiKey: '',
-      model: 'gpt-4o-mini',
-      prompt: DEFAULT_PROMPT,
-      batchSize: 15,
-      timeoutSeconds: 60,
-      maxRetries: 2,
-      concurrency: 3,
-    }
+  const [formData, setFormData] = useState<AppSettings>(() =>
+    normalizePromptProfiles(settings ?? createInitialSettings())
   );
 
   const [isSaving, setIsSaving] = useState(false);
+  const [isApiKeyVisible, setIsApiKeyVisible] = useState(false);
 
   useEffect(() => {
     if (isOpen && settings) {
-      setFormData(settings);
+      setFormData(normalizePromptProfiles(settings));
       setIsSaving(false);
+      setIsApiKeyVisible(false);
     }
   }, [isOpen, settings]);
+
+  const activePromptProfile = formData.promptProfiles.find(
+    (promptProfile) => promptProfile.id === formData.activePromptId
+  ) ?? formData.promptProfiles[0];
+
+  const updateActivePromptProfile = (
+    updates: Partial<Pick<PromptProfile, 'name' | 'content'>>
+  ) => {
+    setFormData((currentFormData) => {
+      const nextPromptProfiles = currentFormData.promptProfiles.map(
+        (promptProfile) => promptProfile.id === currentFormData.activePromptId
+          ? { ...promptProfile, ...updates }
+          : promptProfile
+      );
+      const nextPrompt = updates.content ?? currentFormData.prompt;
+
+      return {
+        ...currentFormData,
+        prompt: nextPrompt,
+        promptProfiles: nextPromptProfiles,
+      };
+    });
+  };
+
+  const handleSelectPromptProfile = (promptProfileId: string) => {
+    setFormData((currentFormData) => {
+      const selectedPromptProfile = currentFormData.promptProfiles.find(
+        (promptProfile) => promptProfile.id === promptProfileId
+      );
+      if (!selectedPromptProfile) {
+        return currentFormData;
+      }
+
+      return {
+        ...currentFormData,
+        prompt: selectedPromptProfile.content,
+        activePromptId: selectedPromptProfile.id,
+      };
+    });
+  };
+
+  const handleAddPromptProfile = () => {
+    const promptProfileId = crypto.randomUUID();
+    const newPromptProfile: PromptProfile = {
+      id: promptProfileId,
+      name: `新提示词 ${formData.promptProfiles.length + 1}`,
+      content: activePromptProfile?.content ?? DEFAULT_PROMPT,
+    };
+
+    setFormData((currentFormData) => ({
+      ...currentFormData,
+      prompt: newPromptProfile.content,
+      promptProfiles: [...currentFormData.promptProfiles, newPromptProfile],
+      activePromptId: newPromptProfile.id,
+    }));
+  };
+
+  const handleDeletePromptProfile = () => {
+    if (formData.promptProfiles.length <= 1) {
+      return;
+    }
+
+    setFormData((currentFormData) => {
+      const activePromptIndex = currentFormData.promptProfiles.findIndex(
+        (promptProfile) => promptProfile.id === currentFormData.activePromptId
+      );
+      const nextPromptProfiles = currentFormData.promptProfiles.filter(
+        (promptProfile) => promptProfile.id !== currentFormData.activePromptId
+      );
+      const nextActivePromptProfile = nextPromptProfiles[
+        Math.min(Math.max(activePromptIndex, 0), nextPromptProfiles.length - 1)
+      ];
+
+      return {
+        ...currentFormData,
+        prompt: nextActivePromptProfile.content,
+        promptProfiles: nextPromptProfiles,
+        activePromptId: nextActivePromptProfile.id,
+      };
+    });
+  };
+
+  const handleResetActivePrompt = () => {
+    updateActivePromptProfile({ content: DEFAULT_PROMPT });
+  };
 
   const handleClose = () => {
     if (isSaving) {
@@ -155,10 +291,36 @@ export default function SettingsDialog({
   };
 
   const handleSave = async () => {
+    const normalizedPromptProfiles = formData.promptProfiles.map(
+      (promptProfile) => ({
+        ...promptProfile,
+        name: promptProfile.name.trim(),
+      })
+    );
+    const normalizedActivePromptProfile = normalizedPromptProfiles.find(
+      (promptProfile) => promptProfile.id === formData.activePromptId
+    );
+
+    if (normalizedPromptProfiles.some(
+      (promptProfile) => !promptProfile.name || !promptProfile.content.trim()
+    )) {
+      onSaveError('提示词名称和内容均不能为空');
+      return;
+    }
+
+    if (!normalizedActivePromptProfile) {
+      onSaveError('当前提示词不存在，请重新选择');
+      return;
+    }
+
     setIsSaving(true);
 
     try {
-      const savedSettings = await saveSettings(formData);
+      const savedSettings = await saveSettings({
+        ...formData,
+        prompt: normalizedActivePromptProfile.content,
+        promptProfiles: normalizedPromptProfiles,
+      });
       setSettings(savedSettings);
       setFormData(savedSettings);
       onSaveSuccess();
@@ -217,22 +379,49 @@ export default function SettingsDialog({
                 <span className="settings-field-hint">OpenAI 兼容接口的基础地址</span>
               </label>
 
-              <label className="settings-field">
-                <span className="settings-field-label">API Key</span>
-                <input
-                  type="password"
-                  className="settings-input"
-                  style={styles.input}
-                  value={formData.apiKey}
-                  onChange={(event) => setFormData({
-                    ...formData,
-                    apiKey: event.target.value,
-                  })}
-                  placeholder="sk-..."
-                  spellCheck={false}
-                  autoComplete="new-password"
-                />
-              </label>
+              <div className="settings-field">
+                <label className="settings-field-label" htmlFor="settings-api-key">
+                  API Key
+                </label>
+                <div className="settings-secret-input-wrapper">
+                  <input
+                    id="settings-api-key"
+                    type={isApiKeyVisible ? 'text' : 'password'}
+                    className="settings-input settings-secret-input"
+                    style={{ ...styles.input, paddingRight: '38px' }}
+                    value={formData.apiKey}
+                    onChange={(event) => setFormData({
+                      ...formData,
+                      apiKey: event.target.value,
+                    })}
+                    placeholder="sk-..."
+                    spellCheck={false}
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    className="settings-secret-toggle"
+                    aria-label={isApiKeyVisible ? '隐藏 API Key' : '显示 API Key'}
+                    aria-pressed={isApiKeyVisible}
+                    title={isApiKeyVisible ? '隐藏 API Key' : '显示 API Key'}
+                    onClick={() => setIsApiKeyVisible((isVisible) => !isVisible)}
+                  >
+                    {isApiKeyVisible ? (
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M3 3l18 18" />
+                        <path d="M10.6 10.7a2 2 0 0 0 2.7 2.7" />
+                        <path d="M9.9 4.2A10.7 10.7 0 0 1 12 4c5.2 0 8.5 4.5 9 6.1a2.6 2.6 0 0 1 0 1.8 10.3 10.3 0 0 1-2 3.3" />
+                        <path d="M6.2 6.2A11.5 11.5 0 0 0 3 10.1a2.6 2.6 0 0 0 0 1.8C3.5 13.5 6.8 18 12 18a10 10 0 0 0 3.1-.5" />
+                      </svg>
+                    ) : (
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M3 10.1C3.5 8.5 6.8 4 12 4s8.5 4.5 9 6.1a2.6 2.6 0 0 1 0 1.8C20.5 13.5 17.2 18 12 18s-8.5-4.5-9-6.1a2.6 2.6 0 0 1 0-1.8Z" />
+                        <circle cx="12" cy="11" r="3" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
+              </div>
 
               <label className="settings-field">
                 <span className="settings-field-label">模型名称</span>
@@ -338,46 +527,165 @@ export default function SettingsDialog({
             </div>
           </section>
 
-          <section className="settings-section settings-prompt-section">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <div style={styles.sectionTitle}>系统提示词</div>
-              <button 
-                type="button"
-                className="btn"
-                style={{ padding: '2px 8px', fontSize: '11px' }}
-                onClick={() => setFormData({ ...formData, prompt: DEFAULT_PROMPT })}
-              >
-                重置为默认
-              </button>
+          <section
+            className="settings-section settings-prompt-section"
+            aria-labelledby="settings-prompt-title"
+          >
+            <div className="settings-section-heading settings-prompt-heading">
+              <div id="settings-prompt-title" className="settings-section-title">
+                提示词
+              </div>
+              <div className="settings-section-description">
+                保存多套任务指令，当前选中的提示词会用于下一次分析
+              </div>
             </div>
-            <textarea
-              className="settings-prompt-input"
-              style={styles.textarea}
-              value={formData.prompt}
-              spellCheck={false}
-              autoComplete="off"
-              onChange={(e) => setFormData({ ...formData, prompt: e.target.value })}
-            />
 
-            <div style={{ marginTop: '10px' }}>
-              <div style={styles.sectionTitle}>输入格式</div>
-              <div className="selectable-text" style={styles.formatExample}>
+            <div className="settings-prompt-workspace">
+              <aside className="settings-prompt-library" aria-label="已保存的提示词">
+                <div className="settings-prompt-library-header">
+                  <div>
+                    <div className="settings-prompt-library-title">提示词库</div>
+                    <div className="settings-prompt-library-count">
+                      {formData.promptProfiles.length} 套配置
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn settings-prompt-add-button"
+                    onClick={handleAddPromptProfile}
+                    title="基于当前内容创建一套新提示词"
+                  >
+                    <span aria-hidden="true">+</span>
+                    新建
+                  </button>
+                </div>
+
+                <div className="settings-prompt-profile-list">
+                  {formData.promptProfiles.map((promptProfile) => {
+                    const isActive = promptProfile.id === formData.activePromptId;
+                    const promptSummary = promptProfile.content
+                      .split('\n')
+                      .find((line) => line.trim())
+                      ?.trim() ?? '暂无提示词内容';
+
+                    return (
+                      <button
+                        key={promptProfile.id}
+                        type="button"
+                        className={`settings-prompt-profile${isActive ? ' is-active' : ''}`}
+                        aria-pressed={isActive}
+                        onClick={() => handleSelectPromptProfile(promptProfile.id)}
+                      >
+                        <span className="settings-prompt-profile-indicator" aria-hidden="true" />
+                        <span className="settings-prompt-profile-copy">
+                          <span className="settings-prompt-profile-name">
+                            {promptProfile.name || '未命名提示词'}
+                          </span>
+                          <span className="settings-prompt-profile-summary">
+                            {promptSummary}
+                          </span>
+                        </span>
+                        {isActive && (
+                          <span className="settings-prompt-active-label">使用中</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </aside>
+
+              <div className="settings-prompt-editor">
+                <div className="settings-prompt-editor-header">
+                  <label className="settings-prompt-title-field">
+                    <span className="settings-prompt-editor-kicker">编辑当前提示词</span>
+                    <input
+                      type="text"
+                      className="settings-prompt-title-input"
+                      value={activePromptProfile?.name ?? ''}
+                      onChange={(event) => updateActivePromptProfile({
+                        name: event.target.value,
+                      })}
+                      placeholder="输入提示词名称"
+                      spellCheck={false}
+                      autoComplete="off"
+                    />
+                  </label>
+
+                  <div className="settings-prompt-editor-actions">
+                    <button
+                      type="button"
+                      className="btn settings-prompt-reset-button"
+                      onClick={handleResetActivePrompt}
+                    >
+                      恢复默认内容
+                    </button>
+                    <button
+                      type="button"
+                      className="btn settings-prompt-delete-button"
+                      onClick={handleDeletePromptProfile}
+                      disabled={formData.promptProfiles.length <= 1}
+                      title={
+                        formData.promptProfiles.length <= 1
+                          ? '至少需要保留一个提示词'
+                          : '删除当前提示词'
+                      }
+                    >
+                      删除
+                    </button>
+                  </div>
+                </div>
+
+                <div className="settings-prompt-editor-status">
+                  <span className="settings-prompt-current-mark">
+                    <span aria-hidden="true" />
+                    下一次分析将使用此提示词
+                  </span>
+                  <span>{activePromptProfile?.content.length ?? 0} 个字符</span>
+                </div>
+
+                <label
+                  htmlFor="settings-prompt-content"
+                  className="settings-prompt-content-label"
+                >
+                  提示词内容
+                </label>
+                <textarea
+                  id="settings-prompt-content"
+                  className="settings-prompt-input settings-prompt-content-input"
+                  style={styles.textarea}
+                  value={activePromptProfile?.content ?? ''}
+                  spellCheck={false}
+                  autoComplete="off"
+                  onChange={(event) => updateActivePromptProfile({
+                    content: event.target.value,
+                  })}
+                />
+              </div>
+            </div>
+
+            <details className="settings-prompt-format-details">
+              <summary>查看模型输入与期待输出格式</summary>
+              <div className="settings-prompt-format-grid">
+                <div>
+                  <div className="settings-prompt-format-title">输入格式</div>
+                  <div className="selectable-text" style={styles.formatExample}>
 {`[
   {"id": "b8c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e", "filename": "[笔趣阁]诡秘之主(全本)作者爱潜水的乌贼"},
   {"id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "filename": "斗破苍穹-天蚕土豆【完结】"}
 ]`}
-              </div>
-            </div>
-
-            <div style={{ marginTop: '10px' }}>
-              <div style={styles.sectionTitle}>期待输出格式</div>
-              <div className="selectable-text" style={styles.formatExample}>
+                  </div>
+                </div>
+                <div>
+                  <div className="settings-prompt-format-title">期待输出格式</div>
+                  <div className="selectable-text" style={styles.formatExample}>
 {`[
   {"id": "b8c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e", "suggested_name": "诡秘之主"},
   {"id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "suggested_name": "斗破苍穹"}
 ]`}
+                  </div>
+                </div>
               </div>
-            </div>
+            </details>
           </section>
         </div>
 

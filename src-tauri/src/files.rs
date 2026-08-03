@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::naming;
+use crate::settings::ImportFileType;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,7 +46,10 @@ pub struct RecycleBinOperation {
 }
 
 #[tauri::command]
-pub fn scan_directory(directory_path: String) -> AppResult<Vec<ScannedFile>> {
+pub fn scan_directory(
+    directory_path: String,
+    import_file_type: ImportFileType,
+) -> AppResult<Vec<ScannedFile>> {
     let directory = Path::new(&directory_path);
     if !directory.is_dir() {
         return Err(AppError::Validation("选择的路径不是有效目录".to_string()));
@@ -62,11 +66,10 @@ pub fn scan_directory(directory_path: String) -> AppResult<Vec<ScannedFile>> {
             continue;
         }
 
-        if let Some(extension) = entry_path.extension() {
-            if !extension.eq_ignore_ascii_case("txt") {
-                continue;
-            }
-        } else {
+        let has_selected_extension = entry_path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case(import_file_type.extension()));
+        if !has_selected_extension {
             continue;
         }
 
@@ -142,6 +145,27 @@ pub fn move_files_to_recycle_bin(
 #[derive(Debug)]
 struct ValidatedFileCandidate {
     file_path: PathBuf,
+    file_extension: &'static str,
+}
+
+fn supported_file_extension(file_name_path: &Path) -> AppResult<&'static str> {
+    let Some(extension) = file_name_path.extension() else {
+        return Err(AppError::Validation(
+            "只能操作 TXT 或 EPUB 文件".to_string(),
+        ));
+    };
+
+    if extension.eq_ignore_ascii_case("txt") {
+        return Ok("txt");
+    }
+
+    if extension.eq_ignore_ascii_case("epub") {
+        return Ok("epub");
+    }
+
+    Err(AppError::Validation(
+        "只能操作 TXT 或 EPUB 文件".to_string(),
+    ))
 }
 
 fn validate_file_candidate(
@@ -168,12 +192,7 @@ fn validate_file_candidate(
         return Err(AppError::Validation("文件名必须位于当前目录中".to_string()));
     }
 
-    let is_txt_file = original_name_path
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"));
-    if !is_txt_file {
-        return Err(AppError::Validation("只能操作 TXT 文件".to_string()));
-    }
+    let file_extension = supported_file_extension(original_name_path)?;
 
     let file_path = directory.join(original_name_path);
     let file_type = fs::symlink_metadata(&file_path)?.file_type();
@@ -187,7 +206,10 @@ fn validate_file_candidate(
     };
     verify_metadata_unchanged(&file_path, &metadata_snapshot)?;
 
-    Ok(ValidatedFileCandidate { file_path })
+    Ok(ValidatedFileCandidate {
+        file_path,
+        file_extension,
+    })
 }
 
 fn validate_recycle_bin_candidate(
@@ -249,7 +271,10 @@ pub fn execute_rename_operations(
                 continue;
             }
         };
-        let source_path = validated_candidate.file_path;
+        let ValidatedFileCandidate {
+            file_path: source_path,
+            file_extension,
+        } = validated_candidate;
 
         let validated_name = naming::normalize_suggested_name(&operation.target_name);
         let normalized_name = match validated_name.normalized_name {
@@ -264,7 +289,7 @@ pub fn execute_rename_operations(
             }
         };
 
-        let final_target_name = format!("{normalized_name}.txt");
+        let final_target_name = format!("{normalized_name}.{file_extension}");
         let target_path = directory.join(&final_target_name);
         let target_is_source = target_path.exists()
             && fs::canonicalize(&target_path).ok() == fs::canonicalize(&source_path).ok();
@@ -279,7 +304,11 @@ pub fn execute_rename_operations(
             continue;
         }
 
-        let temp_path = directory.join(format!("~nnamer_temp_{}.txt", Uuid::new_v4()));
+        let temp_path = directory.join(format!(
+            "~nnamer_temp_{}.{}",
+            Uuid::new_v4(),
+            file_extension
+        ));
         staged_operations.push((file_id, source_path, temp_path, final_target_name));
     }
 
@@ -390,6 +419,79 @@ mod tests {
         assert!(
             validate_recycle_bin_candidate(&test_directory, &changed_metadata_operation).is_err()
         );
+
+        let epub_file_path = test_directory.join("典藏小说.epub");
+        fs::write(&epub_file_path, b"epub container bytes").unwrap();
+        let epub_metadata = fs::metadata(&epub_file_path).unwrap();
+        let epub_operation = RecycleBinOperation {
+            file_id: "file-epub".to_string(),
+            original_name: "典藏小说.epub".to_string(),
+            size_bytes: epub_metadata.len(),
+            modified_at: file_modified_at_millis(&epub_metadata).unwrap(),
+        };
+        assert_eq!(
+            validate_recycle_bin_candidate(&test_directory, &epub_operation).unwrap(),
+            epub_file_path
+        );
+
+        fs::remove_dir_all(test_directory).unwrap();
+    }
+
+    #[test]
+    fn scans_only_the_selected_import_file_type() {
+        let test_directory =
+            std::env::temp_dir().join(format!("nnamer_scan_file_type_{}", Uuid::new_v4()));
+        fs::create_dir_all(&test_directory).unwrap();
+        fs::write(test_directory.join("纯文本小说.txt"), b"txt content").unwrap();
+        fs::write(test_directory.join("电子书小说.EPUB"), b"epub content").unwrap();
+        fs::write(test_directory.join("说明.md"), b"ignored content").unwrap();
+        let directory_path = test_directory.to_string_lossy().into_owned();
+
+        let txt_files = scan_directory(directory_path.clone(), ImportFileType::Txt).unwrap();
+        let epub_files = scan_directory(directory_path, ImportFileType::Epub).unwrap();
+
+        assert_eq!(txt_files.len(), 1);
+        assert_eq!(txt_files[0].original_name, "纯文本小说.txt");
+        assert_eq!(epub_files.len(), 1);
+        assert_eq!(epub_files[0].original_name, "电子书小说.EPUB");
+
+        fs::remove_dir_all(test_directory).unwrap();
+    }
+
+    #[test]
+    fn renames_epub_files_without_changing_their_format() {
+        let test_directory =
+            std::env::temp_dir().join(format!("nnamer_rename_epub_{}", Uuid::new_v4()));
+        fs::create_dir_all(&test_directory).unwrap();
+        let source_path = test_directory.join("混乱书名.EPUB");
+        fs::write(&source_path, b"epub container bytes").unwrap();
+        let metadata = fs::metadata(&source_path).unwrap();
+        let file_id = "file-epub".to_string();
+        let metadata_snapshot = HashMap::from([(
+            file_id.clone(),
+            FileMetadataSnapshot {
+                size_bytes: metadata.len(),
+                modified_at: file_modified_at_millis(&metadata).unwrap(),
+            },
+        )]);
+        let operations = vec![RenameOperation {
+            file_id: file_id.clone(),
+            original_name: "混乱书名.EPUB".to_string(),
+            target_name: "正式书名.epub".to_string(),
+        }];
+
+        let results = execute_rename_operations(
+            test_directory.to_string_lossy().into_owned(),
+            operations,
+            metadata_snapshot,
+        )
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].file_id, file_id);
+        assert!(results[0].success);
+        assert!(test_directory.join("正式书名.epub").exists());
+        assert!(!source_path.exists());
 
         fs::remove_dir_all(test_directory).unwrap();
     }

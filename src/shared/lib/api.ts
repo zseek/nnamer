@@ -3,6 +3,7 @@ import type {
   AppSettings,
   BatchAnalysisResult,
   FileOperationResult,
+  ImportFileType,
   RecycleBinOperation,
   RenameOperation,
   RenameResult,
@@ -17,8 +18,14 @@ export async function saveSettings(settings: AppSettings): Promise<AppSettings> 
   return await invoke<AppSettings>('save_settings', { settings });
 }
 
-export async function scanDirectory(directoryPath: string): Promise<ScannedFile[]> {
-  return await invoke<ScannedFile[]>('scan_directory', { directoryPath });
+export async function scanDirectory(
+  directoryPath: string,
+  importFileType: ImportFileType
+): Promise<ScannedFile[]> {
+  return await invoke<ScannedFile[]>('scan_directory', {
+    directoryPath,
+    importFileType,
+  });
 }
 
 export async function analyzeBatch(

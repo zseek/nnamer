@@ -48,10 +48,13 @@ export interface PromptProfile {
   content: string;
 }
 
+export type ImportFileType = 'txt' | 'epub';
+
 export interface AppSettings {
   baseUrl: string;
   apiKey: string;
   model: string;
+  importFileType: ImportFileType;
   batchSize: number;
   timeoutSeconds: number;
   maxRetries: number;

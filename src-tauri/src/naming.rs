@@ -15,7 +15,7 @@ pub struct NameValidation {
 
 pub fn normalize_suggested_name(input: &str) -> NameValidation {
     let trimmed_input = input.trim();
-    let extensionless_input = strip_txt_extension(trimmed_input);
+    let extensionless_input = strip_supported_file_extension(trimmed_input);
     let mut normalized_name = String::with_capacity(extensionless_input.len());
 
     for character in extensionless_input.chars() {
@@ -73,20 +73,26 @@ pub fn canonical_name(input: &str) -> Option<String> {
         .map(|name| name.to_lowercase())
 }
 
-pub fn strip_txt_extension(input: &str) -> String {
+pub fn strip_supported_file_extension(input: &str) -> String {
     let input_without_trailing_whitespace = input.trim_end();
-    if input_without_trailing_whitespace
-        .to_lowercase()
-        .ends_with(".txt")
-    {
-        let character_count = input_without_trailing_whitespace.chars().count();
-        input_without_trailing_whitespace
-            .chars()
-            .take(character_count - 4)
-            .collect()
+    let normalized_input = input_without_trailing_whitespace.to_lowercase();
+    let extension_character_count = if normalized_input.ends_with(".epub") {
+        Some(5)
+    } else if normalized_input.ends_with(".txt") {
+        Some(4)
     } else {
-        input.to_string()
-    }
+        None
+    };
+
+    let Some(extension_character_count) = extension_character_count else {
+        return input.to_string();
+    };
+
+    let character_count = input_without_trailing_whitespace.chars().count();
+    input_without_trailing_whitespace
+        .chars()
+        .take(character_count - extension_character_count)
+        .collect()
 }
 
 fn invalid_name(message: &str) -> NameValidation {
@@ -98,7 +104,7 @@ fn invalid_name(message: &str) -> NameValidation {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_name, normalize_suggested_name, strip_txt_extension};
+    use super::{canonical_name, normalize_suggested_name, strip_supported_file_extension};
 
     #[test]
     fn removes_txt_extension_and_replaces_windows_characters() {
@@ -108,10 +114,15 @@ mod tests {
     }
 
     #[test]
-    fn strips_txt_extension_without_damaging_unicode() {
-        assert_eq!(strip_txt_extension("诡秘之主.txt"), "诡秘之主");
-        assert_eq!(strip_txt_extension("诡秘之主.TXT"), "诡秘之主");
-        assert_eq!(strip_txt_extension("版本.txt.backup"), "版本.txt.backup");
+    fn strips_supported_extensions_without_damaging_unicode() {
+        assert_eq!(strip_supported_file_extension("诡秘之主.txt"), "诡秘之主");
+        assert_eq!(strip_supported_file_extension("诡秘之主.TXT"), "诡秘之主");
+        assert_eq!(strip_supported_file_extension("宿命之环.epub"), "宿命之环");
+        assert_eq!(strip_supported_file_extension("宿命之环.EPUB"), "宿命之环");
+        assert_eq!(
+            strip_supported_file_extension("版本.txt.backup"),
+            "版本.txt.backup"
+        );
     }
 
     #[test]

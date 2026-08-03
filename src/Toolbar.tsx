@@ -215,11 +215,18 @@ export default function Toolbar() {
   };
 
   const handleSelectDirectory = async () => {
+    if (!settings) {
+      return;
+    }
+
+    const importFileTypeAtScanStart = settings.importFileType;
+    const importFileTypeLabel = importFileTypeAtScanStart.toUpperCase();
+
     try {
       const selected = await open({
         directory: true,
         multiple: false,
-        title: '选择目录',
+        title: `选择包含 ${importFileTypeLabel} 小说的目录`,
       });
 
       if (selected && typeof selected === 'string') {
@@ -227,7 +234,10 @@ export default function Toolbar() {
         setCurrentDirectory(selected);
         
         try {
-          const scannedFiles = await scanDirectory(selected);
+          const scannedFiles = await scanDirectory(
+            selected,
+            importFileTypeAtScanStart
+          );
           const filesWithDefaults: FileItem[] = scannedFiles.map((file) => ({
             ...file,
             hasBeenRenamed: false,
@@ -526,6 +536,8 @@ export default function Toolbar() {
       return;
     }
 
+    const selectedFileIdsAtExecutionStart = Array.from(selectedFileIds);
+
     setIsConflictCleanupConfirmationOpen(false);
     dismissAppNotification();
     setIsCleaningConflicts(true);
@@ -639,6 +651,7 @@ export default function Toolbar() {
         9000
       );
     } finally {
+      clearSelectionForIds(selectedFileIdsAtExecutionStart);
       setIsCleaningConflicts(false);
       setFileOperationProgress(null);
     }
@@ -683,6 +696,8 @@ export default function Toolbar() {
       );
       return;
     }
+
+    const selectedFileIdsAtExecutionStart = Array.from(selectedFileIds);
 
     setIsRenameConfirmationOpen(false);
     dismissAppNotification();
@@ -812,6 +827,7 @@ export default function Toolbar() {
         8000
       );
     } finally {
+      clearSelectionForIds(selectedFileIdsAtExecutionStart);
       setIsRenaming(false);
       setFileOperationProgress(null);
     }
@@ -823,7 +839,7 @@ export default function Toolbar() {
       {
         tone: 'success',
         title: '设置已保存',
-        message: '新的设置将在后续分析请求中生效。',
+        message: '新的设置将在后续导入和分析操作中生效，当前任务列表不会改变。',
       },
       4500
     );
@@ -869,9 +885,21 @@ export default function Toolbar() {
         <button
           className="btn"
           onClick={handleSelectDirectory}
-          disabled={isScanning || analysisProgress.isRunning || isFileOperationRunning}
+          disabled={
+            !settings
+            || isScanning
+            || analysisProgress.isRunning
+            || isFileOperationRunning
+          }
+          title={settings
+            ? `只导入 ${settings.importFileType.toUpperCase()} 文件，可在设置中切换`
+            : '正在加载导入设置'}
         >
-          {isScanning ? '扫描中...' : '选择目录'}
+          {isScanning
+            ? '扫描中...'
+            : settings
+              ? `选择 ${settings.importFileType.toUpperCase()} 目录`
+              : '加载设置...'}
         </button>
         
         {currentDirectory && (

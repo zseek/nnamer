@@ -12,8 +12,9 @@ import {
   formatFileSize,
   getFileIdsInSelectionRange,
   getStatusLabel,
-  stripTxtExtension,
+  stripSupportedFileExtension,
   validateSuggestedName,
+  type FileNameSearchFields,
 } from './shared/lib/fileUtils';
 import type { FileItem, FileStatus } from './shared/types';
 
@@ -110,6 +111,20 @@ const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
   { value: 'renamed', label: '已重命名' },
   { value: 'conflict', label: '冲突' },
   { value: 'failed', label: '失败' },
+];
+
+const SEARCH_SCOPE_OPTIONS: Array<{
+  field: keyof FileNameSearchFields;
+  label: string;
+}> = [
+  {
+    field: 'includeOriginalName',
+    label: '原文件名',
+  },
+  {
+    field: 'includeSuggestedName',
+    label: '建议文件名',
+  },
 ];
 
 const STATUS_CLASSES: Record<FileStatus, string> = {
@@ -340,6 +355,7 @@ const FileTableRow = memo(function FileTableRow({
 
 export default function FileList() {
   const currentDirectory = useAppStore((state) => state.currentDirectory);
+  const settings = useAppStore((state) => state.settings);
   const files = useAppStore((state) => state.files);
   const selectedFileIds = useAppStore((state) => state.selectedFileIds);
   const setFiles = useAppStore((state) => state.setFiles);
@@ -351,6 +367,10 @@ export default function FileList() {
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [activeStatusFilter, setActiveStatusFilter] = useState<StatusFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchFields, setSearchFields] = useState<FileNameSearchFields>({
+    includeOriginalName: true,
+    includeSuggestedName: true,
+  });
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [retainedEditedFileIds, setRetainedEditedFileIds] = useState<Set<string>>(
     () => new Set()
@@ -398,10 +418,16 @@ export default function FileList() {
         || retainedEditedFileIds.has(file.id)
       ) && (
         !hasSearchFilter
-        || fileMatchesNameSearch(file, searchQuery)
+        || fileMatchesNameSearch(file, searchQuery, searchFields)
       )
     );
-  }, [activeStatusFilter, files, retainedEditedFileIds, searchQuery]);
+  }, [
+    activeStatusFilter,
+    files,
+    retainedEditedFileIds,
+    searchFields,
+    searchQuery,
+  ]);
 
   const sortedFiles = useMemo(() => {
     if (!sortField) {
@@ -456,6 +482,10 @@ export default function FileList() {
   useEffect(() => {
     selectionAnchorFileIdRef.current = null;
     setSearchQuery('');
+    setSearchFields({
+      includeOriginalName: true,
+      includeSuggestedName: true,
+    });
     setIsSearchOpen(false);
 
     if (currentDirectory !== null) {
@@ -523,11 +553,11 @@ export default function FileList() {
 
   useEffect(() => {
     selectionAnchorFileIdRef.current = null;
-  }, [searchQuery]);
+  }, [searchFields, searchQuery]);
 
   useEffect(() => {
     tableScrollerRef.current?.scrollTo({ top: 0 });
-  }, [activeStatusFilter, searchQuery, sortField, sortOrder]);
+  }, [activeStatusFilter, searchFields, searchQuery, sortField, sortOrder]);
 
   const handleSort = (field: SortField) => {
     selectionAnchorFileIdRef.current = null;
@@ -592,7 +622,7 @@ export default function FileList() {
 
   const handleSuggestedNameChange = useCallback(
     (fileId: string, inputValue: string) => {
-      const suggestedName = stripTxtExtension(inputValue);
+      const suggestedName = stripSupportedFileExtension(inputValue);
       const validation = validateSuggestedName(suggestedName);
       const currentFiles = useAppStore.getState().files;
       const nextFiles = applySuggestedNameEdit(
@@ -638,6 +668,36 @@ export default function FileList() {
     return sortOrder === 'asc' ? '▲' : '▼';
   };
 
+  const handleSearchFieldToggle = (field: keyof FileNameSearchFields) => {
+    setSearchFields((currentSearchFields) => {
+      const otherField = field === 'includeOriginalName'
+        ? 'includeSuggestedName'
+        : 'includeOriginalName';
+
+      if (currentSearchFields[field] && !currentSearchFields[otherField]) {
+        return currentSearchFields;
+      }
+
+      return {
+        ...currentSearchFields,
+        [field]: !currentSearchFields[field],
+      };
+    });
+  };
+
+  const searchInputLabel = searchFields.includeOriginalName
+    && searchFields.includeSuggestedName
+    ? '原文件名和建议文件名'
+    : searchFields.includeOriginalName
+      ? '原文件名'
+      : '建议文件名';
+  const searchInputPlaceholder = searchFields.includeOriginalName
+    && searchFields.includeSuggestedName
+    ? '搜索原文件名或建议文件名'
+    : searchFields.includeOriginalName
+      ? '搜索原文件名'
+      : '搜索建议文件名';
+
   const handleCloseSearch = () => {
     setSearchQuery('');
     setIsSearchOpen(false);
@@ -652,14 +712,16 @@ export default function FileList() {
 
   if (files.length === 0) {
     return (
-      <div style={{ 
-        ...styles.container, 
-        display: 'flex', 
-        alignItems: 'center', 
+      <div style={{
+        ...styles.container,
+        display: 'flex',
+        alignItems: 'center',
         justifyContent: 'center',
-        color: 'hsl(var(--color-text-secondary))'
+        color: 'hsl(var(--color-text-secondary))',
       }}>
-        请选择目录开始扫描文件
+        {currentDirectory
+          ? `当前目录中没有找到 ${settings?.importFileType.toUpperCase() ?? ''} 文件`
+          : '请选择目录开始扫描文件'}
       </div>
     );
   }
@@ -696,7 +758,7 @@ export default function FileList() {
         <button
           type="button"
           className={`file-search-toggle${isSearchOpen ? ' is-active' : ''}`}
-          aria-label="搜索原文件名和建议文件名"
+          aria-label={isSearchOpen ? '关闭文件名搜索' : '打开文件名搜索'}
           aria-pressed={isSearchOpen}
           title="搜索文件名 (Ctrl+F)"
           onClick={() => {
@@ -716,20 +778,56 @@ export default function FileList() {
       {isSearchOpen && (
         <div className="file-search-bar" role="search">
           <label className="file-search-field">
-            <span className="file-search-label">文件名</span>
+            <span className="file-search-label">关键词</span>
             <input
               ref={searchInputRef}
               type="search"
               className="file-search-input"
               value={searchQuery}
-              placeholder="搜索原文件名或建议文件名"
-              aria-label="搜索原文件名或建议文件名"
+              placeholder={searchInputPlaceholder}
+              aria-label={`搜索${searchInputLabel}`}
               spellCheck={false}
               autoComplete="off"
               onChange={(event) => setSearchQuery(event.target.value)}
               onKeyDown={handleSearchKeyDown}
             />
           </label>
+          <div className="file-search-scope-control">
+            <span className="file-search-scope-label">范围</span>
+            <div
+              className="file-search-scope"
+              role="group"
+              aria-label="选择文件名搜索范围，可多选"
+            >
+              {SEARCH_SCOPE_OPTIONS.map((searchScopeOption) => {
+                const isActive = searchFields[searchScopeOption.field];
+                const isOnlyActiveField = isActive && (
+                  searchScopeOption.field === 'includeOriginalName'
+                    ? !searchFields.includeSuggestedName
+                    : !searchFields.includeOriginalName
+                );
+                return (
+                  <button
+                    key={searchScopeOption.field}
+                    type="button"
+                    className={`file-search-scope-button${isActive ? ' is-active' : ''}`}
+                    aria-pressed={isActive}
+                    disabled={isOnlyActiveField}
+                    title={isOnlyActiveField ? '至少保留一个搜索范围' : undefined}
+                    onClick={() => handleSearchFieldToggle(searchScopeOption.field)}
+                  >
+                    <span
+                      className="file-search-scope-check"
+                      aria-hidden="true"
+                    >
+                      {isActive ? '✓' : ''}
+                    </span>
+                    {searchScopeOption.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <span className="file-search-result" aria-live="polite">
             {filteredFiles.length} 个结果
           </span>

@@ -10,6 +10,26 @@ const DEFAULT_CONCURRENCY: usize = 3;
 const DEFAULT_PROMPT_PROFILE_ID: &str = "default";
 const DEFAULT_PROMPT_PROFILE_NAME: &str = "小说书名识别";
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ImportFileType {
+    Txt,
+    Epub,
+}
+
+impl ImportFileType {
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Txt => "txt",
+            Self::Epub => "epub",
+        }
+    }
+}
+
+fn default_import_file_type() -> ImportFileType {
+    ImportFileType::Txt
+}
+
 fn default_concurrency() -> usize {
     DEFAULT_CONCURRENCY
 }
@@ -63,6 +83,8 @@ pub struct AppSettings {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    #[serde(default = "default_import_file_type")]
+    pub import_file_type: ImportFileType,
     pub batch_size: usize,
     pub timeout_seconds: u64,
     pub max_retries: u32,
@@ -81,6 +103,7 @@ impl Default for AppSettings {
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: String::new(),
             model: "gpt-4o-mini".to_string(),
+            import_file_type: default_import_file_type(),
             batch_size: 15,
             timeout_seconds: 60,
             max_retries: 2,
@@ -219,7 +242,9 @@ fn resolve_settings_path(app_handle: &AppHandle) -> AppResult<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppSettings, PromptProfile, DEFAULT_CONCURRENCY, DEFAULT_PROMPT_PROFILE_ID};
+    use super::{
+        AppSettings, ImportFileType, PromptProfile, DEFAULT_CONCURRENCY, DEFAULT_PROMPT_PROFILE_ID,
+    };
 
     #[test]
     fn rejects_zero_batch_size() {
@@ -267,6 +292,18 @@ mod tests {
 
         let settings: AppSettings = serde_json::from_value(settings_json).unwrap();
         assert_eq!(settings.concurrency, DEFAULT_CONCURRENCY);
+    }
+
+    #[test]
+    fn loads_legacy_settings_with_txt_as_the_import_file_type() {
+        let mut settings_json = serde_json::to_value(AppSettings::default()).unwrap();
+        settings_json
+            .as_object_mut()
+            .unwrap()
+            .remove("importFileType");
+
+        let settings: AppSettings = serde_json::from_value(settings_json).unwrap();
+        assert_eq!(settings.import_file_type, ImportFileType::Txt);
     }
 
     #[test]

@@ -197,6 +197,97 @@
   font-size: 11px;
 }
 
+.settings-import-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.settings-import-fieldset > legend {
+  margin-bottom: 6px;
+  padding: 0;
+}
+
+.settings-import-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settings-import-option {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid hsl(var(--color-border));
+  border-radius: 5px;
+  background: hsl(var(--color-surface));
+  color: hsl(var(--color-text));
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.settings-import-option:hover {
+  border-color: hsl(var(--color-text-secondary) / 0.42);
+}
+
+.settings-import-option:focus-within {
+  border-color: hsl(var(--color-primary));
+  box-shadow: 0 0 0 2px hsl(var(--color-primary) / 0.12);
+}
+
+.settings-import-option.is-active {
+  border-color: hsl(var(--color-primary) / 0.48);
+  background: hsl(var(--color-primary) / 0.08);
+}
+
+.settings-import-option input {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: hsl(var(--color-primary));
+}
+
+.settings-import-option-copy {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-import-option-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.settings-import-option-extension {
+  color: hsl(var(--color-text-secondary) / 0.8);
+  font-family: monospace;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.settings-import-option-description,
+.settings-import-note {
+  color: hsl(var(--color-text-secondary) / 0.76);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.settings-import-note {
+  margin-top: 7px;
+}
+
 .settings-service-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -643,6 +734,10 @@
 }
 
 @media (max-width: 680px) {
+  .settings-import-options {
+    grid-template-columns: 1fr;
+  }
+
   .settings-parameter-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1813,12 +1908,14 @@
   .status-filter-button,
   .file-search-input,
   .file-search-toggle,
+  .file-search-scope-button,
   .file-search-close,
   .desktop-context-menu-item,
   .file-row,
   .file-suggested-input,
   .settings-input,
   .settings-prompt-input,
+  .settings-import-option,
   .operation-confirmation-backdrop,
   .operation-confirmation-dialog,
   .logger-modal-backdrop,
@@ -1891,7 +1988,87 @@
   gap: 8px;
 }
 
+.file-search-scope-control {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.file-search-scope {
+  display: inline-flex;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid hsl(var(--color-border));
+  border-radius: 4px;
+  background: hsl(var(--color-surface));
+}
+
+.file-search-scope-button {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 0;
+  border-right: 1px solid hsl(var(--color-border));
+  border-radius: 0;
+  background: transparent;
+  color: hsl(var(--color-text-secondary));
+  font-size: 11px;
+  white-space: nowrap;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.file-search-scope-button:last-child {
+  border-right: 0;
+}
+
+.file-search-scope-button:hover:not(.is-active) {
+  background: hsl(var(--color-background));
+  color: hsl(var(--color-text));
+}
+
+.file-search-scope-button.is-active {
+  background: hsl(var(--color-primary) / 0.1);
+  color: hsl(var(--color-primary-hover));
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 hsl(var(--color-primary));
+}
+
+.file-search-scope-button:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid hsl(var(--color-primary));
+  outline-offset: -2px;
+}
+
+.file-search-scope-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.file-search-scope-check {
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid hsl(var(--color-text-secondary) / 0.5);
+  border-radius: 2px;
+  color: hsl(var(--color-surface));
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.file-search-scope-button.is-active .file-search-scope-check {
+  border-color: hsl(var(--color-primary));
+  background: hsl(var(--color-primary));
+}
+
 .file-search-label,
+.file-search-scope-label,
 .file-search-result {
   flex: 0 0 auto;
   color: hsl(var(--color-text-secondary));

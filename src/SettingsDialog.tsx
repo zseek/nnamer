@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAppStore } from './store';
 import { saveSettings } from './shared/lib/api';
-import type { AppSettings, PromptProfile } from './shared/types';
+import type { AppSettings, ImportFileType, PromptProfile } from './shared/types';
 
 const styles: { [key: string]: React.CSSProperties } = {
   overlay: {
@@ -121,6 +121,25 @@ const DEFAULT_PROMPT = `你是一个专业的文件名识别工具。你的任�
 
 const DEFAULT_PROMPT_PROFILE_ID = 'default';
 const DEFAULT_PROMPT_PROFILE_NAME = '小说书名识别';
+const IMPORT_FILE_TYPE_OPTIONS: Array<{
+  value: ImportFileType;
+  title: string;
+  extension: string;
+  description: string;
+}> = [
+  {
+    value: 'txt',
+    title: 'TXT 小说',
+    extension: '.txt',
+    description: '适合日常批量整理纯文本小说',
+  },
+  {
+    value: 'epub',
+    title: 'EPUB 小说',
+    extension: '.epub',
+    description: '按文件名分析，不读取电子书正文',
+  },
+];
 
 function createDefaultPromptProfile(): PromptProfile {
   return {
@@ -137,6 +156,7 @@ function createInitialSettings(): AppSettings {
     baseUrl: '',
     apiKey: '',
     model: 'gpt-4o-mini',
+    importFileType: 'txt',
     prompt: defaultPromptProfile.content,
     promptProfiles: [defaultPromptProfile],
     activePromptId: defaultPromptProfile.id,
@@ -148,6 +168,7 @@ function createInitialSettings(): AppSettings {
 }
 
 function normalizePromptProfiles(settings: AppSettings): AppSettings {
+  const importFileType = settings.importFileType ?? 'txt';
   const promptProfiles = settings.promptProfiles ?? [];
   if (promptProfiles.length === 0) {
     const migratedPromptProfile: PromptProfile = {
@@ -158,6 +179,7 @@ function normalizePromptProfiles(settings: AppSettings): AppSettings {
 
     return {
       ...settings,
+      importFileType,
       prompt: migratedPromptProfile.content,
       promptProfiles: [migratedPromptProfile],
       activePromptId: migratedPromptProfile.id,
@@ -170,6 +192,7 @@ function normalizePromptProfiles(settings: AppSettings): AppSettings {
 
   return {
     ...settings,
+    importFileType,
     prompt: activePromptProfile.content,
     activePromptId: activePromptProfile.id,
   };
@@ -350,6 +373,58 @@ export default function SettingsDialog({
         <div id="settings-dialog-title" style={styles.header}>设置</div>
         
         <div style={styles.content}>
+          <section className="settings-section" aria-labelledby="settings-import-title">
+            <div className="settings-section-heading">
+              <div id="settings-import-title" className="settings-section-title">
+                文件导入
+              </div>
+              <div className="settings-section-description">
+                决定下一次选择目录时扫描的小说格式
+              </div>
+            </div>
+
+            <fieldset className="settings-import-fieldset">
+              <legend className="settings-field-label">导入文件类型</legend>
+              <div className="settings-import-options">
+                {IMPORT_FILE_TYPE_OPTIONS.map((fileTypeOption) => {
+                  const isActive = formData.importFileType === fileTypeOption.value;
+
+                  return (
+                    <label
+                      key={fileTypeOption.value}
+                      className={`settings-import-option${isActive ? ' is-active' : ''}`}
+                    >
+                      <input
+                        type="radio"
+                        name="import-file-type"
+                        value={fileTypeOption.value}
+                        checked={isActive}
+                        onChange={() => setFormData((currentFormData) => ({
+                          ...currentFormData,
+                          importFileType: fileTypeOption.value,
+                        }))}
+                      />
+                      <span className="settings-import-option-copy">
+                        <span className="settings-import-option-heading">
+                          <span>{fileTypeOption.title}</span>
+                          <span className="settings-import-option-extension">
+                            {fileTypeOption.extension}
+                          </span>
+                        </span>
+                        <span className="settings-import-option-description">
+                          {fileTypeOption.description}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              <div className="settings-import-note">
+                保存后从下一次选择目录开始生效，当前任务列表不会改变。
+              </div>
+            </fieldset>
+          </section>
+
           <section className="settings-section" aria-labelledby="settings-service-title">
             <div className="settings-section-heading">
               <div id="settings-service-title" className="settings-section-title">

@@ -3,6 +3,7 @@ import type {
   ConflictGroup,
   FileItem,
   FileStatus,
+  ImportFileType,
   ResolvableConflictGroup,
 } from '../types';
 
@@ -18,17 +19,38 @@ export interface SuggestedNameValidation {
   error?: string;
 }
 
-export function stripTxtExtension(input: string): string {
+export function stripSupportedFileExtension(input: string): string {
   const inputWithoutTrailingWhitespace = input.trimEnd();
-  if (!inputWithoutTrailingWhitespace.toLowerCase().endsWith('.txt')) {
+  const normalizedInput = inputWithoutTrailingWhitespace.toLocaleLowerCase();
+  const supportedExtension = ['.epub', '.txt'].find(
+    (extension) => normalizedInput.endsWith(extension)
+  );
+
+  if (!supportedExtension) {
     return input;
   }
 
-  return inputWithoutTrailingWhitespace.slice(0, -4);
+  return inputWithoutTrailingWhitespace.slice(0, -supportedExtension.length);
+}
+
+export function getSupportedFileExtension(
+  fileName: string
+): ImportFileType | undefined {
+  const normalizedFileName = fileName.trimEnd().toLocaleLowerCase();
+
+  if (normalizedFileName.endsWith('.epub')) {
+    return 'epub';
+  }
+
+  if (normalizedFileName.endsWith('.txt')) {
+    return 'txt';
+  }
+
+  return undefined;
 }
 
 export function validateSuggestedName(input: string): SuggestedNameValidation {
-  const extensionlessInput = stripTxtExtension(input.trim());
+  const extensionlessInput = stripSupportedFileExtension(input.trim());
   const safeCharacters = extensionlessInput
     .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
     .replace(/[<>:"/\\|?*]/g, (character) => {
@@ -468,20 +490,36 @@ export function chunkItems<T>(
   return batches;
 }
 
+export interface FileNameSearchFields {
+  includeOriginalName: boolean;
+  includeSuggestedName: boolean;
+}
+
+const DEFAULT_FILE_NAME_SEARCH_FIELDS: FileNameSearchFields = {
+  includeOriginalName: true,
+  includeSuggestedName: true,
+};
+
 export function fileMatchesNameSearch(
   file: Pick<FileItem, 'originalName' | 'suggestedName'>,
-  searchQuery: string
+  searchQuery: string,
+  searchFields: FileNameSearchFields = DEFAULT_FILE_NAME_SEARCH_FIELDS
 ): boolean {
   const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase();
   if (!normalizedSearchQuery) {
     return true;
   }
 
-  return [file.originalName, file.suggestedName]
-    .filter((fileName): fileName is string => Boolean(fileName))
-    .some((fileName) =>
-      fileName.toLocaleLowerCase().includes(normalizedSearchQuery)
+  const originalNameMatches = searchFields.includeOriginalName
+    && file.originalName.toLocaleLowerCase().includes(normalizedSearchQuery);
+  const suggestedNameMatches = searchFields.includeSuggestedName
+    && Boolean(
+      file.suggestedName
+        ?.toLocaleLowerCase()
+        .includes(normalizedSearchQuery)
     );
+
+  return originalNameMatches || suggestedNameMatches;
 }
 
 export function getFileIdsInSelectionRange(
@@ -522,9 +560,11 @@ export function applySuccessfulFileRenames(
       return file;
     }
 
+    const fileExtension = getSupportedFileExtension(file.originalName) ?? 'txt';
+
     return {
       ...file,
-      originalName: `${targetStem}.txt`,
+      originalName: `${targetStem}.${fileExtension}`,
       originalStem: targetStem,
       suggestedName: targetStem,
       normalizedName: targetStem,

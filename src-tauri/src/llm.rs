@@ -237,7 +237,7 @@ fn build_batch_messages(
         .iter()
         .map(|request| FilePromptInput {
             id: request.file_id.clone(),
-            filename: naming::strip_txt_extension(&request.original_stem),
+            filename: request.original_stem.clone(),
         })
         .collect::<Vec<_>>();
     let file_inputs_json = serde_json::to_string_pretty(&file_inputs)?;
@@ -294,7 +294,8 @@ fn parse_completion_response(
     let mut results = Vec::new();
     for request in requests {
         let analysis_result = if let Some(suggested_name) = suggestion_map.get(&request.file_id) {
-            let extensionless_suggested_name = naming::strip_txt_extension(suggested_name);
+            let extensionless_suggested_name =
+                naming::strip_supported_file_extension(suggested_name);
             let validation = naming::normalize_suggested_name(&extensionless_suggested_name);
             AnalysisResult {
                 file_id: request.file_id.clone(),
@@ -331,12 +332,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builds_separate_system_prompt_and_file_json_messages() {
+    fn builds_separate_system_prompt_and_preserves_scanned_stems() {
         let system_prompt = "只使用这段用户配置的提示词。\n不要追加其他内容。";
         let requests = vec![
             AnalysisRequest {
                 file_id: "file-001".to_string(),
-                original_stem: "诡秘之主(全本).TXT".to_string(),
+                original_stem: "教程.txt".to_string(),
             },
             AnalysisRequest {
                 file_id: "file-002".to_string(),
@@ -355,22 +356,28 @@ mod tests {
         assert_eq!(
             file_inputs,
             json!([
-                {"id": "file-001", "filename": "诡秘之主(全本)"},
+                {"id": "file-001", "filename": "教程.txt"},
                 {"id": "file-002", "filename": "带\"引号\"的书名"}
             ])
         );
     }
 
     #[test]
-    fn strips_extensions_from_llm_suggestions() {
-        let requests = vec![AnalysisRequest {
-            file_id: "file-001".to_string(),
-            original_stem: "诡秘之主".to_string(),
-        }];
+    fn strips_supported_extensions_from_llm_suggestions() {
+        let requests = vec![
+            AnalysisRequest {
+                file_id: "file-001".to_string(),
+                original_stem: "诡秘之主".to_string(),
+            },
+            AnalysisRequest {
+                file_id: "file-002".to_string(),
+                original_stem: "宿命之环".to_string(),
+            },
+        ];
         let response_text = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": r#"[{"id":"file-001","suggested_name":"诡秘之主.txt"}]"#
+                    "content": r#"[{"id":"file-001","suggested_name":"诡秘之主.txt"},{"id":"file-002","suggested_name":"宿命之环.EPUB"}]"#
                 }
             }]
         })
@@ -384,6 +391,14 @@ mod tests {
         assert_eq!(
             result.results[0].normalized_name.as_deref(),
             Some("诡秘之主")
+        );
+        assert_eq!(
+            result.results[1].suggested_name.as_deref(),
+            Some("宿命之环")
+        );
+        assert_eq!(
+            result.results[1].normalized_name.as_deref(),
+            Some("宿命之环")
         );
     }
 }

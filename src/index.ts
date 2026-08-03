@@ -3,6 +3,7 @@ export type {
   FileItem,
   FileStatus,
   AppSettings,
+  ImportFileType,
   PromptProfile,
   AnalysisProgress,
   ConflictGroup,

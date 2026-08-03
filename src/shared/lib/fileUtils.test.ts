@@ -13,7 +13,7 @@ import {
   keepOriginalNamesForFileIds,
   recomputeFileStatuses,
   resetFileStatusesForFileIds,
-  stripTxtExtension,
+  stripSupportedFileExtension,
   validateSuggestedName,
 } from './fileUtils';
 
@@ -36,11 +36,13 @@ function selectedIds(...ids: string[]): ReadonlySet<string> {
   return new Set(ids);
 }
 
-describe('stripTxtExtension', () => {
-  it('removes only a trailing TXT extension, case-insensitively', () => {
-    expect(stripTxtExtension('诡秘之主.txt')).toBe('诡秘之主');
-    expect(stripTxtExtension('诡秘之主.TXT')).toBe('诡秘之主');
-    expect(stripTxtExtension('版本.txt.backup')).toBe('版本.txt.backup');
+describe('stripSupportedFileExtension', () => {
+  it('removes trailing TXT and EPUB extensions case-insensitively', () => {
+    expect(stripSupportedFileExtension('诡秘之主.txt')).toBe('诡秘之主');
+    expect(stripSupportedFileExtension('诡秘之主.TXT')).toBe('诡秘之主');
+    expect(stripSupportedFileExtension('宿命之环.epub')).toBe('宿命之环');
+    expect(stripSupportedFileExtension('宿命之环.EPUB')).toBe('宿命之环');
+    expect(stripSupportedFileExtension('版本.txt.backup')).toBe('版本.txt.backup');
   });
 });
 
@@ -140,15 +142,63 @@ describe('getSelectedAnalyzableFiles', () => {
 
 describe('fileMatchesNameSearch', () => {
   const file = createFile('original', {
-    originalName: 'AUTHOR-诡秘之主.txt',
+    originalName: 'AUTHOR-混乱标题.txt',
     suggestedName: '诡秘之主',
     status: 'ready',
   });
 
-  it('matches original and suggested names case-insensitively', () => {
+  it('matches original and suggested names case-insensitively by default', () => {
     expect(fileMatchesNameSearch(file, 'author')).toBe(true);
     expect(fileMatchesNameSearch(file, '诡秘之主')).toBe(true);
     expect(fileMatchesNameSearch(file, 'AUTHOR')).toBe(true);
+  });
+
+  it('limits matching to the selected filename fields', () => {
+    expect(
+      fileMatchesNameSearch(file, 'author', {
+        includeOriginalName: true,
+        includeSuggestedName: false,
+      })
+    ).toBe(true);
+    expect(
+      fileMatchesNameSearch(file, 'author', {
+        includeOriginalName: false,
+        includeSuggestedName: true,
+      })
+    ).toBe(false);
+    expect(
+      fileMatchesNameSearch(file, '诡秘之主', {
+        includeOriginalName: true,
+        includeSuggestedName: false,
+      })
+    ).toBe(false);
+    expect(
+      fileMatchesNameSearch(file, '诡秘之主', {
+        includeOriginalName: false,
+        includeSuggestedName: true,
+      })
+    ).toBe(true);
+    expect(
+      fileMatchesNameSearch(file, '作者', {
+        includeOriginalName: true,
+        includeSuggestedName: true,
+      })
+    ).toBe(false);
+  });
+
+  it('does not match missing suggested names in suggested-only fields', () => {
+    const fileWithoutSuggestion = createFile('pending', {
+      originalName: '等待分析.txt',
+      suggestedName: undefined,
+      status: 'pending',
+    });
+
+    expect(
+      fileMatchesNameSearch(fileWithoutSuggestion, '等待分析', {
+        includeOriginalName: false,
+        includeSuggestedName: true,
+      })
+    ).toBe(false);
   });
 
   it('treats empty or whitespace-only queries as matching', () => {
@@ -221,6 +271,23 @@ describe('applySuccessfulFileRenames', () => {
       hasBeenRenamed: true,
     });
     expect(nextFiles[1]).toBe(unrelatedFile);
+  });
+
+  it('preserves the EPUB extension after a successful rename', () => {
+    const epubFile = createFile('rename-epub', {
+      originalName: '旧书名.epub',
+      originalStem: '旧书名',
+      suggestedName: '新书名',
+      normalizedName: '新书名',
+      status: 'ready',
+    });
+
+    const nextFiles = applySuccessfulFileRenames(
+      [epubFile],
+      new Map([['rename-epub', '新书名']])
+    );
+
+    expect(nextFiles[0].originalName).toBe('新书名.epub');
   });
 
   it('allows a successfully renamed file to be renamed again', () => {

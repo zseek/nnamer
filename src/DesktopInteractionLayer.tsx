@@ -513,6 +513,7 @@ export default function DesktopInteractionLayer() {
       return;
     }
 
+    const selectedIdsSnapshot = Array.from(selectedIds);
     const previousFiles = useAppStore.getState().files;
     const nextFiles = resetFileStatusesForFileIds(previousFiles, selectedIds);
     if (nextFiles === previousFiles) {
@@ -524,10 +525,12 @@ export default function DesktopInteractionLayer() {
         },
         4000
       );
+      clearSelectionForIds(selectedIdsSnapshot);
       return;
     }
 
     setFiles(nextFiles);
+    clearSelectionForIds(selectedIdsSnapshot);
     displayDeleteNotification(
       {
         tone: 'success',
@@ -560,6 +563,7 @@ export default function DesktopInteractionLayer() {
       return;
     }
 
+    const selectedIdsSnapshot = Array.from(selectedIds);
     const previousFiles = useAppStore.getState().files;
     const nextFiles = keepOriginalNamesForFileIds(previousFiles, selectedIds);
     if (nextFiles === previousFiles) {
@@ -571,10 +575,12 @@ export default function DesktopInteractionLayer() {
         },
         4000
       );
+      clearSelectionForIds(selectedIdsSnapshot);
       return;
     }
 
     setFiles(nextFiles);
+    clearSelectionForIds(selectedIdsSnapshot);
     displayDeleteNotification(
       {
         tone: 'success',

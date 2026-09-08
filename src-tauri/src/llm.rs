@@ -71,11 +71,21 @@ pub async fn analyze_batch(
         settings.base_url.trim_end_matches('/')
     );
 
-    let request_body = json!({
+    let mut request_body = json!({
         "model": settings.model,
         "messages": messages,
         "temperature": 0.3,
     });
+
+    let request_body_object = request_body.as_object_mut().unwrap();
+    request_body_object.insert("store".to_string(), json!(false));
+
+    if settings.model.contains("o1") || settings.model.contains("o3") {
+        request_body_object.insert("reasoning_effort".to_string(), json!("low"));
+    } else {
+        request_body_object.insert("stream_options".to_string(), json!(null));
+    }
+
     let request_body_text = serde_json::to_string_pretty(&request_body)?;
 
     let mut last_error = None;

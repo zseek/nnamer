@@ -1934,6 +1934,17 @@
   gap: 8px;
 }
 
+/* 数值列（字符数/大小）表头：文字与箭头整体靠右，箭头保持在列右缘原位，
+   数据单元格以 30px 右内边距与之对齐。 */
+.file-size-cell .file-table-header-content {
+  justify-content: flex-end;
+}
+
+/* 表头列之间用分隔线标示列宽边界；第一列（全选框）左侧不出线。 */
+.file-table thead th + th {
+  border-left: 1px solid hsl(var(--color-border));
+}
+
 .file-search-toggle {
   min-height: 26px;
   display: inline-flex;

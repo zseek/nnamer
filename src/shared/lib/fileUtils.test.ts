@@ -5,6 +5,7 @@ import {
   applySuggestedNameEdit,
   chunkItems,
   collectFileIdsLeavingStatusFilter,
+  countCharacters,
   createConflictCleanupPlan,
   fileMatchesNameSearch,
   getFileIdsInSelectionRange,
@@ -35,6 +36,18 @@ function createFile(
 function selectedIds(...ids: string[]): ReadonlySet<string> {
   return new Set(ids);
 }
+
+describe('countCharacters', () => {
+  it('counts Unicode characters instead of UTF-16 code units', () => {
+    expect(countCharacters('诡秘之主')).toBe(4);
+    expect(countCharacters('abc')).toBe(3);
+    expect(countCharacters('')).toBe(0);
+    // 「𠮷」是代理对字符：按字符计为 1，而不是 2。
+    expect(countCharacters('𠮷野')).toBe(2);
+    // Emoji 组合字符按字位计数。
+    expect(countCharacters('📚小说')).toBe(3);
+  });
+});
 
 describe('stripSupportedFileExtension', () => {
   it('removes trailing TXT and EPUB extensions case-insensitively', () => {

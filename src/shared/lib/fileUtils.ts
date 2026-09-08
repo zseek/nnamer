@@ -49,6 +49,11 @@ export function getSupportedFileExtension(
   return undefined;
 }
 
+/** 统计字符串的 Unicode 字符数：中日韩与 emoji 均按 1 个字符计数。 */
+export function countCharacters(input: string): number {
+  return Array.from(input).length;
+}
+
 export function validateSuggestedName(input: string): SuggestedNameValidation {
   const extensionlessInput = stripSupportedFileExtension(input.trim());
   const safeCharacters = extensionlessInput

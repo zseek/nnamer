@@ -8,6 +8,7 @@ import {
 import {
   applySuggestedNameEdit,
   collectFileIdsLeavingStatusFilter,
+  countCharacters,
   fileMatchesNameSearch,
   formatFileSize,
   getFileIdsInSelectionRange,
@@ -98,7 +99,12 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
 };
 
-type SortField = 'originalStem' | 'suggestedName' | null;
+type SortField =
+  | 'originalStem'
+  | 'suggestedName'
+  | 'characterCount'
+  | 'sizeBytes'
+  | null;
 type SortOrder = 'asc' | 'desc';
 type StatusFilter = FileStatus | 'all';
 
@@ -340,7 +346,17 @@ const FileTableRow = memo(function FileTableRow({
           />
         )}
       </td>
-      <td className="file-size-cell" style={styles.td}>
+      <td
+        className="file-size-cell"
+        // 右内边距补偿表头箭头(10px)+间距(8px)的占位，使数字落在表头文字正下方。
+        style={{ ...styles.td, paddingRight: '30px' }}
+      >
+        {countCharacters(file.originalStem)}
+      </td>
+      <td
+        className="file-size-cell"
+        style={{ ...styles.td, paddingRight: '30px' }}
+      >
         {formatFileSize(file.sizeBytes)}
       </td>
       <td style={styles.td} title={file.error}>
@@ -436,16 +452,26 @@ export default function FileList() {
 
     const filesToSort = [...filteredFiles];
     return filesToSort.sort((firstFile, secondFile) => {
-      const firstValue = sortField === 'originalStem'
-        ? firstFile.originalStem
-        : firstFile.suggestedName ?? '';
-      const secondValue = sortField === 'originalStem'
-        ? secondFile.originalStem
-        : secondFile.suggestedName ?? '';
-      const comparison = firstValue.localeCompare(secondValue, 'zh-CN', {
-        sensitivity: 'base',
-        numeric: true,
-      });
+      let comparison: number;
+
+      if (sortField === 'characterCount') {
+        comparison =
+          countCharacters(firstFile.originalStem)
+          - countCharacters(secondFile.originalStem);
+      } else if (sortField === 'sizeBytes') {
+        comparison = firstFile.sizeBytes - secondFile.sizeBytes;
+      } else {
+        const firstValue = sortField === 'originalStem'
+          ? firstFile.originalStem
+          : firstFile.suggestedName ?? '';
+        const secondValue = sortField === 'originalStem'
+          ? secondFile.originalStem
+          : secondFile.suggestedName ?? '';
+        comparison = firstValue.localeCompare(secondValue, 'zh-CN', {
+          sensitivity: 'base',
+          numeric: true,
+        });
+      }
 
       return sortOrder === 'asc' ? comparison : -comparison;
     });
@@ -849,6 +875,7 @@ export default function FileList() {
         style={styles.tableScroller}
       >
         <table
+          className="file-table"
           style={styles.table}
           aria-rowcount={sortedFiles.length + 1}
         >
@@ -869,7 +896,7 @@ export default function FileList() {
                 />
               </th>
               <th
-                style={{ ...styles.th, ...styles.thSortable, width: '35%' }}
+                style={{ ...styles.th, ...styles.thSortable, width: '32%' }}
                 onClick={() => handleSort('originalStem')}
               >
                 <span className="file-table-header-content">
@@ -880,7 +907,7 @@ export default function FileList() {
                 </span>
               </th>
               <th
-                style={{ ...styles.th, ...styles.thSortable, width: '38%' }}
+                style={{ ...styles.th, ...styles.thSortable, width: '34%' }}
                 onClick={() => handleSort('suggestedName')}
               >
                 <span className="file-table-header-content">
@@ -892,9 +919,27 @@ export default function FileList() {
               </th>
               <th
                 className="file-size-cell"
-                style={{ ...styles.th, width: '90px' }}
+                style={{ ...styles.th, ...styles.thSortable, width: '80px' }}
+                onClick={() => handleSort('characterCount')}
               >
-                大小
+                <span className="file-table-header-content">
+                  <span>字符数</span>
+                  <span className="file-sort-indicator" aria-hidden="true">
+                    {getSortIndicator('characterCount')}
+                  </span>
+                </span>
+              </th>
+              <th
+                className="file-size-cell"
+                style={{ ...styles.th, ...styles.thSortable, width: '90px' }}
+                onClick={() => handleSort('sizeBytes')}
+              >
+                <span className="file-table-header-content">
+                  <span>大小</span>
+                  <span className="file-sort-indicator" aria-hidden="true">
+                    {getSortIndicator('sizeBytes')}
+                  </span>
+                </span>
               </th>
               <th style={{ ...styles.th, width: '116px' }}>状态</th>
             </tr>
@@ -903,7 +948,7 @@ export default function FileList() {
             {virtualPaddingTop > 0 && (
               <tr aria-hidden="true">
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   style={{ height: `${virtualPaddingTop}px`, padding: 0 }}
                 />
               </tr>
@@ -926,7 +971,7 @@ export default function FileList() {
             {virtualPaddingBottom > 0 && (
               <tr aria-hidden="true">
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   style={{ height: `${virtualPaddingBottom}px`, padding: 0 }}
                 />
               </tr>
